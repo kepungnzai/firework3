@@ -1,0 +1,11 @@
+{
+  "name": "appointment_unverified_patient_rejected",
+  "description": "Guardrail rejects a request from a patient who has not verified their email.",
+  "setup": { "patient_verified": false, "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 10 },
+  "expected": {
+    "status": "cancelled",
+    "reason": "patient_not_verified",
+    "tools": ["send_email"]
+  }
+}

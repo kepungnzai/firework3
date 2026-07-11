@@ -1,0 +1,11 @@
+{
+  "name": "reschedule_to_taken_slot_rejected",
+  "description": "Guardrail rejects a reschedule onto an already-busy slot; no mutation.",
+  "setup": { "patient_verified": true, "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 12 }], "busy": [15] },
+  "request": { "type": "reschedule", "resource": "Dr Lee", "hour": 12, "new_hour": 15 },
+  "expected": {
+    "status": "confirmed",
+    "reason": "slot_already_booked",
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "send_email"]
+  }
+}

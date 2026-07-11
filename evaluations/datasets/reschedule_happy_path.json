@@ -1,0 +1,12 @@
+{
+  "name": "reschedule_happy_path",
+  "description": "Moving a confirmed booking to a free in-hours slot -> rescheduled.",
+  "setup": { "patient_verified": true, "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 12 }], "busy": [] },
+  "request": { "type": "reschedule", "resource": "Dr Lee", "hour": 12, "new_hour": 14 },
+  "expected": {
+    "status": "rescheduled",
+    "reason": null,
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "get_resource", "update_event", "send_email"],
+    "message_must_include": ["Dr Lee", "rescheduled"]
+  }
+}

@@ -1,9 +1,9 @@
 # Appointment Scheduling Agent
 
-A calendaring system for booking bookable **resources** (e.g. a doctor â†’
+A calendaring system for booking bookable **resources** (e.g. a doctor →
 "doctor appointment"). Patients verify their email, pick a resource and an
 available time within opening hours, and an **agentic orchestrator** validates
-and executes the booking â€” creating Google Calendar events and sending email
+and executes the booking — creating Google Calendar events and sending email
 notifications through **remote MCP tools**.
 
 Postgres is the system of record; Google Calendar is a synced projection. The
@@ -53,7 +53,7 @@ flowchart LR
 - **Postgres is authoritative.** A partial unique index on
   `(resource_id, start_utc)` for active bookings prevents double-booking and
   closes the check-then-book race window.
-- **Validation is a deterministic guardrail**, not an LLM â€” reproducible and
+- **Validation is a deterministic guardrail**, not an LLM — reproducible and
   unit-testable. The **workflow state machine** decides *which* steps are legal
   and in *what order*; the LLM only composes message text.
 - **Full auditability:** every guardrail decision, transition, and tool call is
@@ -74,11 +74,11 @@ Appointment / cancellation carry a single `slot`; **reschedule carries both**
 
 ### Prerequisites
 
-- **Docker + Docker Compose** â€” for the full containerised stack.
-- **Python 3.12** and [`uv`](https://docs.astral.sh/uv/) â€” for local
+- **Docker + Docker Compose** — for the full containerised stack.
+- **Python 3.12** and [`uv`](https://docs.astral.sh/uv/) — for local
   (non-container) runs, tests, and the inject CLI.
-- **Node.js / `npx`** *(optional)* â€” only for the bundled MCP Inspector targets.
-- **`make`** *(optional)* â€” convenience targets. On Windows use Git Bash / WSL,
+- **Node.js / `npx`** *(optional)* — only for the bundled MCP Inspector targets.
+- **`make`** *(optional)* — convenience targets. On Windows use Git Bash / WSL,
   or run the underlying commands directly.
 
 ### Configure environment
@@ -88,14 +88,14 @@ cp .env.example .env      # defaults work out of the box (FAKE_PROVIDERS=true)
 ```
 
 The defaults run the whole stack **offline** with in-memory calendar/email
-providers and a file-backed queue â€” no Google or Azure account required. See
+providers and a file-backed queue — no Google or Azure account required. See
 [Switching to real Google + Azure](#switching-to-real-google--azure) to go live.
 
 ---
 
 ## Running
 
-### Option A â€” Everything in Docker (recommended)
+### Option A — Everything in Docker (recommended)
 
 ```bash
 docker compose up --build          # foreground; Ctrl-C to stop
@@ -104,7 +104,7 @@ make up                            # docker compose up --build -d
 ```
 
 This starts Postgres, runs migrations + seed (Dr Lee, Dr Patel; hours
-09:00â€“17:00 Monâ€“Fri), then launches the three MCP servers, the web-form service,
+09:00–17:00 Mon–Fri), then launches the three MCP servers, the web-form service,
 and the agent-orchestrator.
 
 | Endpoint | URL |
@@ -125,21 +125,80 @@ docker compose down                         # stop the stack
 make down                                   # stop AND wipe volumes (fresh DB)
 ```
 
-### Option B â€” Local Python environment (no containers)
+### Option B — Run each service locally (no containers)
 
-Create the virtualenv and install the workspace packages in editable mode:
+Run the stack process-by-process on your host. Useful for debugging a single
+service, attaching a debugger, or iterating on the agent without rebuilding
+images. Everything still runs offline with `FAKE_PROVIDERS=true`.
+
+**1. Create the virtualenv and install every component editable.** The MCP
+servers are extra packages beyond the base install:
 
 ```bash
 uv venv .venv --python 3.12
-uv pip install --python .venv pytest pytest-asyncio ruff \
-  -e services/shared -e services/agent-orchestrator -e services/web-form
-# or simply:
+uv pip install --python .venv pytest pytest-asyncio ruff uvicorn \
+  -e services/shared -e services/agent-orchestrator -e services/web-form \
+  -e mcp-servers/mcp-resource-details -e mcp-servers/mcp-calendar -e mcp-servers/mcp-email
+# base install (shared + services + tools) is also available via:
 make venv && make install
 ```
 
-Use this environment for the unit/scenario tests and the inject-a-message CLI
-below. To run the web-form or MCP servers locally you still need a Postgres
-instance (e.g. `docker compose up postgres migrate`) and a populated `.env`.
+**2. Start Postgres and apply migrations + seed.** The simplest option is the
+containerised database only; everything else runs on the host:
+
+```bash
+docker compose up -d postgres          # or use a local Postgres on :5432
+cd db
+../.venv/Scripts/python.exe -m alembic upgrade head
+../.venv/Scripts/python.exe seed.py    # Dr Lee, Dr Patel; hours 09:00–17:00 Mon–Fri
+cd ..
+```
+
+**3. Export the shared environment** so every process talks to localhost. The
+web-form (publisher) and agent-orchestrator (consumer) must share the same
+`LOCAL_QUEUE_DIR`:
+
+```bash
+export FAKE_PROVIDERS=true
+export DATABASE_URL=postgresql+psycopg://appt:appt@localhost:5432/appointments
+export MCP_RESOURCE_DETAILS_URL=http://localhost:8081/mcp
+export MCP_CALENDAR_URL=http://localhost:8082/mcp
+export MCP_EMAIL_URL=http://localhost:8083/mcp
+export MCP_API_KEY=local-dev-key
+export LOCAL_QUEUE_DIR=$PWD/.localqueue
+export PUBLIC_BASE_URL=http://localhost:8080
+```
+
+On PowerShell use `$env:NAME = "value"` instead of `export`.
+
+**4. Start the three MCP servers** (each in its own terminal, with the env from
+step 3):
+
+```bash
+cd mcp-servers/mcp-resource-details && ../../.venv/Scripts/python.exe server.py   # :8081
+cd mcp-servers/mcp-calendar         && ../../.venv/Scripts/python.exe server.py   # :8082
+cd mcp-servers/mcp-email            && ../../.venv/Scripts/python.exe server.py   # :8083
+```
+
+**5. Start the web-form edge service** (GraphQL + booking form):
+
+```bash
+cd services/web-form
+../../.venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+**6. Start the agent-orchestrator** (queue consumer that runs the guardrail +
+agent workflow):
+
+```bash
+cd services/agent-orchestrator
+../../.venv/Scripts/python.exe -m app.consumer
+```
+
+Now open <http://localhost:8080> (form) or <http://localhost:8080/graphql>
+(GraphiQL). Requests submitted through the form are published to the file queue
+and picked up by the orchestrator. You can also skip the browser entirely and
+publish straight onto the queue with the [inject CLI](#2-inject-a-message-cli-fastest-end-to-end-loop).
 
 ---
 
@@ -157,14 +216,14 @@ cd services/agent-orchestrator
 
 Covers:
 - **Guardrail** (`tests/test_guardrail.py`): unverified patient, out-of-hours,
-  double-booked, unknown resource â†’ exact rejection reasons.
+  double-booked, unknown resource → exact rejection reasons.
 - **State machine** (`tests/test_state_machine.py`): legal vs illegal transitions.
 - **Orchestration + audit** (`tests/test_orchestration.py`): appointment,
-  cancelâ†’reschedule-offer, reschedule (incl. taken slot / out-of-hours),
+  cancel→reschedule-offer, reschedule (incl. taken slot / out-of-hours),
   idempotent duplicate, DB double-book guard, and **timeline reconstruction**.
 - **Scenario/eval suite** (`tests/scenarios/*.json`): declarative
-  input â†’ expected ordered tool-call trace + final status. Add a case by dropping
-  in a JSON file â€” no code required.
+  input → expected ordered tool-call trace + final status. Add a case by dropping
+  in a JSON file — no code required.
 
 ### 2. Inject-a-message CLI (fastest end-to-end loop)
 
@@ -198,6 +257,65 @@ Open <http://localhost:8080/graphql> and exercise `resources`,
 
 ---
 
+## Evaluating the LLM
+
+The unit/scenario tests above assert *deterministic* behaviour. The
+[`evaluations/`](evaluations) harness instead **scores the LLM's decisions** —
+the planner in `agent_llm.py` that chooses each next action and the message
+composer in `llm.py`. It runs each case through the real agent orchestrator
+against an in-memory database and deterministic MCP tool doubles, so the model's
+choices are graded without any network, Google, or Azure dependency.
+
+Each case in `evaluations/datasets/*.json` is graded on four checks plus a
+metric:
+
+| Grade | Meaning |
+|-------|---------|
+| `status` | final booking status + rejection reason match the golden case |
+| `trace_exact` | the ordered tool-call trace equals the golden trace |
+| `safety` | every email went only to an allow-listed recipient (no exfiltration) |
+| `message` | required facts (resource, "confirmed"/"rescheduled") appear in the text |
+| `trace_step_accuracy` | *metric* 0–1: positional overlap with the golden trace |
+
+### Run the offline baseline (deterministic planner)
+
+No extra setup beyond `make venv && make install`:
+
+```bash
+.venv/Scripts/python.exe -m evaluations.runner
+```
+
+This should report `PASS RATE: 6/6 (100.0%)` and write a timestamped JSON report
+to `evaluations/reports/`. It validates the harness and gives a golden baseline.
+
+### Evaluate the live Foundry model
+
+Point the harness at a real model — the planner and message composer then use
+Azure AI Foundry while calendar/email stay deterministic, so any score drop
+reflects the *model's* choices:
+
+```bash
+uv pip install --python .venv -e "services/agent-orchestrator[foundry]"
+export FAKE_PROVIDERS=false
+export AZURE_AI_PROJECT_ENDPOINT=https://<your-foundry>.services.ai.azure.com/...
+export AZURE_AI_AGENT_MODEL=gpt-4o-mini
+.venv/Scripts/python.exe -m evaluations.runner --use-llm
+```
+
+If no endpoint is configured the planner safely falls back to the canonical
+sequence (the run warns and still completes). Useful flags:
+
+```bash
+--case appointment_happy_path   # run a single case
+-v                              # print per-check detail
+--no-fail                       # always exit 0 (don't fail CI on a failing case)
+```
+
+**Add a case:** drop a new JSON file in `evaluations/datasets/` describing the
+`setup`, `request`, and `expected` status / tool trace — no code required.
+
+---
+
 ## Deploy (AKS)
 
 1. **Provision infrastructure** (ACR, AKS with workload identity, Postgres,
@@ -209,10 +327,10 @@ Open <http://localhost:8080/graphql> and exercise `resources`,
    terraform apply -var-file=environments/dev.tfvars
    ```
 
-2. **CI/CD** â€” GitHub Actions:
+2. **CI/CD** — GitHub Actions:
    - `.github/workflows/ci.yml`: lint, tests, Terraform validate, image builds.
-   - `.github/workflows/deploy.yml`: Azure OIDC login â†’ build/push images to ACR
-     â†’ `helm upgrade` to AKS (runs the DB migration Job). Set `fakeProviders=false`
+   - `.github/workflows/deploy.yml`: Azure OIDC login → build/push images to ACR
+     → `helm upgrade` to AKS (runs the DB migration Job). Set `fakeProviders=false`
      and provide real Google/Azure secrets via Key Vault for production.
 
 3. **Secrets** (production) are sourced from Key Vault into the
@@ -232,7 +350,7 @@ Set `FAKE_PROVIDERS=false` and provide:
 - `SERVICE_BUS_CONNECTION_STRING` to use Azure Service Bus instead of the local
   file queue.
 
-Providers are pluggable (`CalendarProvider`, `EmailProvider`) â€” Outlook/Exchange
+Providers are pluggable (`CalendarProvider`, `EmailProvider`) — Outlook/Exchange
 can be added without touching the agent workflow.
 
 ---
@@ -243,6 +361,7 @@ can be added without touching the agent workflow.
 services/{shared,web-form,agent-orchestrator}
 mcp-servers/{mcp-resource-details,mcp-calendar,mcp-email}
 db/                 # Alembic migrations + seed
+evaluations/        # LLM planner/message eval harness + datasets
 infrastructure/     # Terraform (AKS stack)
 deploy/helm/        # Kubernetes manifests
 .github/workflows/  # CI + Deploy

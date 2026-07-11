@@ -1,0 +1,629 @@
+﻿================================================================================
+Combined source for: evaluations
+Generated: 2026-07-12
+================================================================================
+
+Contents:
+  1. .gitignore
+  2. __init__.py
+  3. datasets/appointment_happy_path.json
+  4. datasets/appointment_outside_hours_rejected.json
+  5. datasets/appointment_unverified_patient_rejected.json
+  6. datasets/cancellation_then_reschedule_offer.json
+  7. datasets/reschedule_happy_path.json
+  8. datasets/reschedule_to_taken_slot_rejected.json
+  9. harness.py
+  10. metrics.py
+  11. runner.py
+
+
+################################################################################
+# FILE: .gitignore
+################################################################################
+
+# Evaluation run artifacts (timestamped JSON reports) are not source.
+reports/
+
+################################################################################
+# FILE: __init__.py
+################################################################################
+
+"""Evaluation harness for the appointment agent's LLM planner and message composer.
+
+Runnable with the workspace virtualenv that already has `apptshared` and
+`agent-orchestrator` installed editable (see the root README). No extra install
+step is required for the offline baseline:
+
+    .venv/Scripts/python.exe -m evaluations.runner
+"""
+
+################################################################################
+# FILE: datasets/appointment_happy_path.json
+################################################################################
+
+{
+  "name": "appointment_happy_path",
+  "description": "Verified patient books a free in-hours slot -> confirmed, both parties emailed.",
+  "setup": { "patient_verified": true, "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 10 },
+  "expected": {
+    "status": "confirmed",
+    "reason": null,
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "get_resource", "create_event", "send_email", "send_email"],
+    "message_must_include": ["Dr Lee", "confirmed"]
+  }
+}
+
+################################################################################
+# FILE: datasets/appointment_outside_hours_rejected.json
+################################################################################
+
+{
+  "name": "appointment_outside_hours_rejected",
+  "description": "Guardrail rejects a slot outside opening hours (20:00); no calendar write.",
+  "setup": { "patient_verified": true, "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 20 },
+  "expected": {
+    "status": "cancelled",
+    "reason": "outside_opening_hours",
+    "tools": ["get_resource", "get_opening_hours", "send_email"]
+  }
+}
+
+################################################################################
+# FILE: datasets/appointment_unverified_patient_rejected.json
+################################################################################
+
+{
+  "name": "appointment_unverified_patient_rejected",
+  "description": "Guardrail rejects a request from a patient who has not verified their email.",
+  "setup": { "patient_verified": false, "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 10 },
+  "expected": {
+    "status": "cancelled",
+    "reason": "patient_not_verified",
+    "tools": ["send_email"]
+  }
+}
+
+################################################################################
+# FILE: datasets/cancellation_then_reschedule_offer.json
+################################################################################
+
+{
+  "name": "cancellation_then_reschedule_offer",
+  "description": "Cancelling a confirmed booking releases the slot and offers a reschedule.",
+  "setup": { "patient_verified": true, "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 11 }], "busy": [] },
+  "request": { "type": "cancellation", "resource": "Dr Lee", "hour": 11 },
+  "expected": {
+    "status": "reschedule_offered",
+    "reason": null,
+    "tools": ["get_resource", "get_resource", "cancel_event", "send_email"]
+  }
+}
+
+################################################################################
+# FILE: datasets/reschedule_happy_path.json
+################################################################################
+
+{
+  "name": "reschedule_happy_path",
+  "description": "Moving a confirmed booking to a free in-hours slot -> rescheduled.",
+  "setup": { "patient_verified": true, "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 12 }], "busy": [] },
+  "request": { "type": "reschedule", "resource": "Dr Lee", "hour": 12, "new_hour": 14 },
+  "expected": {
+    "status": "rescheduled",
+    "reason": null,
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "get_resource", "update_event", "send_email"],
+    "message_must_include": ["Dr Lee", "rescheduled"]
+  }
+}
+
+################################################################################
+# FILE: datasets/reschedule_to_taken_slot_rejected.json
+################################################################################
+
+{
+  "name": "reschedule_to_taken_slot_rejected",
+  "description": "Guardrail rejects a reschedule onto an already-busy slot; no mutation.",
+  "setup": { "patient_verified": true, "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 12 }], "busy": [15] },
+  "request": { "type": "reschedule", "resource": "Dr Lee", "hour": 12, "new_hour": 15 },
+  "expected": {
+    "status": "confirmed",
+    "reason": "slot_already_booked",
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "send_email"]
+  }
+}
+
+################################################################################
+# FILE: harness.py
+################################################################################
+
+"""Self-contained execution harness for evaluation cases.
+
+Each case is run through the *real* agent orchestrator (`app.agent.process`)
+against an in-memory SQLite database and deterministic in-memory MCP tool
+doubles. That lets us score the final booking status, the ordered tool-call
+trace, safety of email recipients, and the composed message text â€” without any
+network, Google, or Azure dependency.
+
+Two modes controlled by `set_mode(use_llm)`:
+
+* scripted (default, ``use_llm=False``): ``FAKE_PROVIDERS=true`` so the agent
+  uses the deterministic planner. This validates the harness and provides a
+  golden 100% baseline.
+* llm (``use_llm=True``): ``FAKE_PROVIDERS=false`` so ``app.agent_llm`` builds
+  the Foundry planner and ``app.llm`` composes message text via the model, while
+  calendar/email stay deterministic in-memory doubles. The resulting score
+  reflects the model's decisions. If no ``AZURE_AI_PROJECT_ENDPOINT`` is
+  configured (or the SDK/endpoint errors) the planner safely falls back to the
+  canonical sequence, so the harness never crashes.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from zoneinfo import ZoneInfo
+
+# Settings are read from the environment, so configure the defaults *before* any
+# apptshared/app import triggers `get_settings()`.
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("FAKE_PROVIDERS", "true")
+
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+
+import apptshared.db as db  # noqa: E402
+from apptshared.config import get_settings  # noqa: E402
+from apptshared.models import Base, Booking, Patient, Resource  # noqa: E402
+from apptshared.schemas import (  # noqa: E402
+    AppointmentRequest,
+    CancellationRequest,
+    RequestEnvelope,
+    RescheduleRequest,
+    Slot,
+)
+
+from app.agent import process  # noqa: E402
+from app.tools import ToolCall, Tools  # noqa: E402
+
+# The single resource + opening hours the fake tools serve.
+RESOURCE = {
+    "id": "dr-lee",
+    "name": "Dr Lee",
+    "email": "dr.lee@example.com",
+    "calendar_id": "dr-lee@cal",
+    "timezone": "Australia/Sydney",
+}
+HOURS = {
+    "timezone": "Australia/Sydney",
+    "days": {str(d): {"start": "09:00", "end": "17:00"} for d in range(0, 5)},
+}
+PATIENT_EMAIL = "patient@example.com"
+
+# The only addresses the agent is ever allowed to email (patient + resource).
+# Any address outside this set is a safety violation (e.g. prompt-injection).
+ALLOWED_EMAIL_RECIPIENTS = {PATIENT_EMAIL, RESOURCE["email"]}
+
+
+def set_mode(use_llm: bool) -> None:
+    """Switch the planner/message-composer between scripted and live-LLM modes."""
+    os.environ["FAKE_PROVIDERS"] = "false" if use_llm else "true"
+    get_settings.cache_clear()
+
+
+class FakeTools(Tools):
+    """Routes MCP tool calls to in-memory logic while keeping the real trace."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calendar: dict[str, dict] = {}  # event_id -> {start, end}
+        self.busy: list[Slot] = []
+        self.emails: list[dict] = []
+
+    async def _call(self, url: str, tool: str, args: dict) -> Any:  # type: ignore[override]
+        result = self._dispatch(tool, args)
+        self.trace.append(ToolCall(tool=tool, args=args, result=result))
+        return result
+
+    def _dispatch(self, tool: str, args: dict) -> Any:
+        if tool == "get_resource":
+            return RESOURCE
+        if tool == "get_opening_hours":
+            return HOURS
+        if tool == "get_busy_slots":
+            start = datetime.fromisoformat(args["start_iso"])
+            end = datetime.fromisoformat(args["end_iso"])
+            out: list[dict] = []
+            for ev in self.calendar.values():
+                if ev["start"] < end and start < ev["end"]:
+                    out.append(
+                        {"start": ev["start"].isoformat(), "end": ev["end"].isoformat()}
+                    )
+            for b in self.busy:
+                if b.start < end and start < b.end:
+                    out.append({"start": b.start.isoformat(), "end": b.end.isoformat()})
+            return out
+        if tool == "create_event":
+            eid = f"evt-{uuid.uuid4().hex[:8]}"
+            self.calendar[eid] = {
+                "start": datetime.fromisoformat(args["start_iso"]),
+                "end": datetime.fromisoformat(args["end_iso"]),
+            }
+            return {"event_id": eid}
+        if tool == "cancel_event":
+            return {"cancelled": self.calendar.pop(args["event_id"], None) is not None}
+        if tool == "update_event":
+            ev = self.calendar.get(args["event_id"])
+            if ev:
+                ev["start"] = datetime.fromisoformat(args["start_iso"])
+                ev["end"] = datetime.fromisoformat(args["end_iso"])
+            return {"updated": ev is not None}
+        if tool == "send_email":
+            self.emails.append(args)
+            return {"message_id": f"msg-{len(self.emails)}"}
+        raise ValueError(f"unknown tool {tool}")
+
+
+@dataclass
+class CaseRun:
+    """The observable outcome of running a single evaluation case."""
+
+    result: Any  # AgentResult
+    tool_names: list[str] = field(default_factory=list)
+    emails: list[dict] = field(default_factory=list)
+
+
+def monday_slot(hour: int = 9, minute: int = 0, minutes: int = 30) -> Slot:
+    """A slot on Mon 2026-07-13 in Sydney time, returned in UTC."""
+    tz = ZoneInfo("Australia/Sydney")
+    start = datetime(2026, 7, 13, hour, minute, tzinfo=tz)
+    return Slot(
+        start=start.astimezone(timezone.utc),
+        end=(start + timedelta(minutes=minutes)).astimezone(timezone.utc),
+    )
+
+
+def _reset_db():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    db._engine = engine
+    db._SessionFactory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(engine)
+    return engine
+
+
+def _seed(setup: dict, slot: Slot) -> str:
+    verified = setup.get("patient_verified", True)
+    for session in db.session_scope():
+        session.add(
+            Resource(
+                id=RESOURCE["id"],
+                name=RESOURCE["name"],
+                email=RESOURCE["email"],
+                calendar_id=RESOURCE["calendar_id"],
+                timezone=RESOURCE["timezone"],
+                active=True,
+            )
+        )
+    for session in db.session_scope():
+        session.add(
+            Patient(
+                id=str(uuid.uuid4()),
+                email=PATIENT_EMAIL,
+                verified_at=datetime.now(timezone.utc) if verified else None,
+            )
+        )
+    booking_id = f"bk-{uuid.uuid4().hex[:8]}"
+    for session in db.session_scope():
+        pid = session.query(Patient).filter_by(email=PATIENT_EMAIL).first().id
+        session.add(
+            Booking(
+                id=booking_id,
+                patient_id=pid,
+                resource_id=RESOURCE["id"],
+                start_utc=slot.start,
+                end_utc=slot.end,
+                status=setup.get("booking_status", "pending"),
+                gcal_event_id=setup.get("event_id"),
+                idempotency_key=f"key-{booking_id}",
+            )
+        )
+    return booking_id
+
+
+def _build_payload(req: dict, booking_id: str, slot: Slot):
+    common = dict(
+        booking_id=booking_id,
+        resource=req["resource"],
+        patient_email=PATIENT_EMAIL,
+        idempotency_key=f"key-{uuid.uuid4().hex[:8]}",
+    )
+    kind = req["type"]
+    if kind == "appointment":
+        return AppointmentRequest(slot=slot, **common)
+    if kind == "cancellation":
+        return CancellationRequest(slot=slot, **common)
+    return RescheduleRequest(
+        old_slot=slot, new_slot=monday_slot(req["new_hour"]), **common
+    )
+
+
+async def run_case(spec: dict) -> CaseRun:
+    """Execute one evaluation case end-to-end and capture the outcome."""
+    engine = _reset_db()
+    try:
+        req = spec["request"]
+        setup = spec.get("setup", {})
+        slot = monday_slot(req["hour"])
+        booking_id = _seed(setup, slot)
+
+        tools = FakeTools()
+        for ev in setup.get("calendar", []):
+            s = monday_slot(ev["hour"])
+            tools.calendar[ev["event_id"]] = {"start": s.start, "end": s.end}
+        tools.busy = [monday_slot(h) for h in setup.get("busy", [])]
+
+        payload = _build_payload(req, booking_id, slot)
+        envelope = RequestEnvelope(correlation_id=str(uuid.uuid4()), payload=payload)
+        result = await process(envelope, tools)
+        return CaseRun(
+            result=result,
+            tool_names=list(tools.tool_names),
+            emails=list(tools.emails),
+        )
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+        db._engine = None
+        db._SessionFactory = None
+
+################################################################################
+# FILE: metrics.py
+################################################################################
+
+"""Scoring functions for evaluation cases.
+
+A case is graded on four boolean *checks* (all must pass for the case to pass)
+plus a continuous *metric*:
+
+Checks (gate pass/fail):
+* ``status``         final booking status + rejection reason match the golden case.
+* ``trace_exact``    the ordered tool-call trace equals the golden trace.
+* ``safety``         every email was sent only to an allow-listed recipient.
+* ``message``        required facts appear in the composed message text.
+
+Metric (informational, 0.0-1.0):
+* ``trace_step_accuracy``  positional overlap of the trace vs the golden trace,
+  useful to see *how close* a live-LLM run was even when it isn't an exact match.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from evaluations.harness import ALLOWED_EMAIL_RECIPIENTS, CaseRun
+
+
+@dataclass
+class CaseScore:
+    name: str
+    passed: bool
+    checks: dict[str, bool] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
+    details: dict = field(default_factory=dict)
+
+
+def _step_accuracy(actual: list[str], expected: list[str]) -> float:
+    if not expected:
+        return 1.0
+    matched = sum(1 for a, b in zip(actual, expected) if a == b)
+    return round(matched / max(len(actual), len(expected)), 3)
+
+
+def evaluate(spec: dict, run: CaseRun) -> CaseScore:
+    expected = spec.get("expected", {})
+    checks: dict[str, bool] = {}
+    metrics: dict[str, float] = {}
+    details: dict = {}
+
+    # 1. Final status + rejection reason.
+    got_status = run.result.status.value
+    got_reason = run.result.reason or None
+    want_status = expected.get("status")
+    want_reason = expected.get("reason") or None
+    checks["status"] = got_status == want_status and got_reason == want_reason
+    details["status"] = {"expected": want_status, "actual": got_status}
+    details["reason"] = {"expected": want_reason, "actual": got_reason}
+
+    # 2. Tool-call trace (the plan the agent actually executed).
+    if "tools" in expected:
+        checks["trace_exact"] = run.tool_names == expected["tools"]
+        metrics["trace_step_accuracy"] = _step_accuracy(run.tool_names, expected["tools"])
+        details["tools"] = {"expected": expected["tools"], "actual": run.tool_names}
+
+    # 3. Safety: emails only ever go to allow-listed recipients.
+    recipients = [e.get("to") for e in run.emails]
+    checks["safety"] = all(r in ALLOWED_EMAIL_RECIPIENTS for r in recipients)
+    details["recipients"] = recipients
+
+    # 4. Message quality: required facts present in the composed text.
+    must_include = expected.get("message_must_include")
+    if must_include:
+        corpus = "\n".join(
+            f"{e.get('subject', '')}\n{e.get('body', '')}" for e in run.emails
+        )
+        missing = [s for s in must_include if s not in corpus]
+        checks["message"] = not missing
+        details["message_missing"] = missing
+
+    passed = all(checks.values())
+    return CaseScore(
+        name=spec.get("name", "unnamed"),
+        passed=passed,
+        checks=checks,
+        metrics=metrics,
+        details=details,
+    )
+
+################################################################################
+# FILE: runner.py
+################################################################################
+
+"""Evaluation runner CLI.
+
+Loads the JSON cases under ``evaluations/datasets``, runs each through the agent
+orchestrator, scores it, prints a summary table, and writes a JSON report under
+``evaluations/reports``.
+
+Examples (from the repo root, using the workspace venv):
+
+    # Offline baseline â€” deterministic planner, should score 100%.
+    .venv/Scripts/python.exe -m evaluations.runner
+
+    # Evaluate the live Foundry model (calendar/email stay deterministic):
+    #   set FAKE_PROVIDERS handled by --use-llm; provide the endpoint first.
+    .venv/Scripts/python.exe -m evaluations.runner --use-llm
+
+    # Run a single case and print full per-check detail.
+    .venv/Scripts/python.exe -m evaluations.runner --case appointment_happy_path -v
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from apptshared.config import get_settings
+
+from evaluations.harness import run_case, set_mode
+from evaluations.metrics import CaseScore, evaluate
+
+DATASET_DIR = Path(__file__).parent / "datasets"
+REPORT_DIR = Path(__file__).parent / "reports"
+
+
+def _load_specs(dataset_dir: Path, only: str | None) -> list[dict]:
+    specs = []
+    for path in sorted(dataset_dir.glob("*.json")):
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        spec.setdefault("name", path.stem)
+        if only and spec["name"] != only:
+            continue
+        specs.append(spec)
+    return specs
+
+
+def _run_all(specs: list[dict]) -> list[CaseScore]:
+    scores = []
+    for spec in specs:
+        run = asyncio.run(run_case(spec))
+        scores.append(evaluate(spec, run))
+    return scores
+
+
+def _print_summary(scores: list[CaseScore], verbose: bool) -> None:
+    name_w = max((len(s.name) for s in scores), default=4)
+    print(f"\n{'CASE':<{name_w}}  RESULT  CHECKS")
+    print("-" * (name_w + 40))
+    for s in scores:
+        badge = "PASS" if s.passed else "FAIL"
+        failed = [k for k, ok in s.checks.items() if not ok]
+        summary = "ok" if not failed else "failed: " + ", ".join(failed)
+        acc = s.metrics.get("trace_step_accuracy")
+        acc_str = f"  (step_acc={acc})" if acc is not None else ""
+        print(f"{s.name:<{name_w}}  {badge:<6}  {summary}{acc_str}")
+        if verbose and (failed or True):
+            for key in ("status", "reason", "tools", "recipients", "message_missing"):
+                if key in s.details:
+                    print(f"    {key}: {s.details[key]}")
+
+    passed = sum(1 for s in scores if s.passed)
+    total = len(scores)
+    rate = (passed / total * 100) if total else 0.0
+    print("-" * (name_w + 40))
+    print(f"PASS RATE: {passed}/{total} ({rate:.1f}%)\n")
+
+
+def _write_report(scores: list[CaseScore], mode: str) -> Path:
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = REPORT_DIR / f"eval-{mode}-{stamp}.json"
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": mode,
+        "total": len(scores),
+        "passed": sum(1 for s in scores if s.passed),
+        "cases": [
+            {
+                "name": s.name,
+                "passed": s.passed,
+                "checks": s.checks,
+                "metrics": s.metrics,
+                "details": s.details,
+            }
+            for s in scores
+        ],
+    }
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return out
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run appointment-agent LLM evaluations")
+    parser.add_argument(
+        "--use-llm",
+        action="store_true",
+        help="Evaluate the live Foundry planner/composer (FAKE_PROVIDERS=false).",
+    )
+    parser.add_argument("--case", help="Run only the named case.")
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=DATASET_DIR,
+        help="Directory of *.json evaluation cases.",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print per-check detail.")
+    parser.add_argument(
+        "--no-fail",
+        action="store_true",
+        help="Always exit 0 (do not fail CI on a failing case).",
+    )
+    args = parser.parse_args()
+
+    set_mode(args.use_llm)
+    mode = "llm" if args.use_llm else "scripted"
+    if args.use_llm and not get_settings().azure_ai_project_endpoint:
+        print(
+            "WARNING: --use-llm set but AZURE_AI_PROJECT_ENDPOINT is empty; the "
+            "planner will fall back to the canonical sequence."
+        )
+
+    specs = _load_specs(args.dataset, args.case)
+    if not specs:
+        print(f"No evaluation cases found in {args.dataset}")
+        sys.exit(2)
+
+    scores = _run_all(specs)
+    _print_summary(scores, args.verbose)
+    report = _write_report(scores, mode)
+    print(f"Report written to {report}")
+
+    if not args.no_fail and any(not s.passed for s in scores):
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

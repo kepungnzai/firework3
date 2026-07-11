@@ -1,0 +1,11 @@
+{
+  "name": "appointment_outside_hours_rejected",
+  "description": "Guardrail rejects a slot outside opening hours (20:00); no calendar write.",
+  "setup": { "patient_verified": true, "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 20 },
+  "expected": {
+    "status": "cancelled",
+    "reason": "outside_opening_hours",
+    "tools": ["get_resource", "get_opening_hours", "send_email"]
+  }
+}

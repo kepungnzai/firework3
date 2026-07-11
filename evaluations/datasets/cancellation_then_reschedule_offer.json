@@ -1,0 +1,11 @@
+{
+  "name": "cancellation_then_reschedule_offer",
+  "description": "Cancelling a confirmed booking releases the slot and offers a reschedule.",
+  "setup": { "patient_verified": true, "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 11 }], "busy": [] },
+  "request": { "type": "cancellation", "resource": "Dr Lee", "hour": 11 },
+  "expected": {
+    "status": "reschedule_offered",
+    "reason": null,
+    "tools": ["get_resource", "get_resource", "cancel_event", "send_email"]
+  }
+}
