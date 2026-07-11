@@ -1,0 +1,31 @@
+# Values for the appointment-scheduler chart.
+image:
+  registry: myacr.azurecr.io
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Set to "false" in production to use real Google/Azure providers.
+fakeProviders: "true"
+
+# Provided via a Kubernetes Secret synced from Key Vault (CSI driver) in prod.
+secretName: appointment-secrets
+
+env:
+  MCP_RESOURCE_DETAILS_URL: http://mcp-resource-details:8081/mcp
+  MCP_CALENDAR_URL: http://mcp-calendar:8082/mcp
+  MCP_EMAIL_URL: http://mcp-email:8083/mcp
+  SERVICE_BUS_QUEUE_NAME: appointment-requests
+  PUBLIC_BASE_URL: https://appointments.example.com
+
+ingress:
+  enabled: true
+  host: appointments.example.com
+  className: nginx
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

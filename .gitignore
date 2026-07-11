@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Env / secrets
+.env
+*.local.env
+credentials.json
+token.json
+service-account*.json
+
+# Terraform
+infrastructure/**/.terraform/
+infrastructure/**/*.tfstate
+infrastructure/**/*.tfstate.*
+infrastructure/**/*.tfplan
+infrastructure/**/.terraform.lock.hcl
+
+# Node (MCP inspector)
+node_modules/
+
+# IDE / OS
+.DS_Store
+.idea/
+*.swp

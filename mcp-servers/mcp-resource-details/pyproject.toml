@@ -1,0 +1,22 @@
+[project]
+name = "mcp-resource-details"
+version = "0.1.0"
+description = "Remote MCP server exposing resource details and opening hours"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2",
+    "apptshared",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server.py"]
+
+[tool.uv.sources]
+apptshared = { path = "../../services/shared", editable = true }

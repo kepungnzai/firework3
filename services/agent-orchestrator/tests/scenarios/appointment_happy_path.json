@@ -1,0 +1,10 @@
+{
+  "name": "appointment_happy_path",
+  "setup": { "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 10 },
+  "expected": {
+    "status": "confirmed",
+    "reason": null,
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "get_resource", "create_event", "send_email", "send_email"]
+  }
+}

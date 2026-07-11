@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Book an Appointment</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      fieldset { margin-bottom: 1rem; }
+      label { display: block; margin: 0.4rem 0 0.1rem; font-weight: 600; }
+      input, select, button { padding: 0.5rem; font-size: 1rem; }
+      button { cursor: pointer; }
+      #slots button { display: inline-block; margin: 0.2rem; }
+      pre { background: #f4f4f4; padding: 0.75rem; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Book an Appointment</h1>
+
+    <fieldset>
+      <legend>1. Verify your email</legend>
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+      <button onclick="startVerification()">Send verification link</button>
+      <p><em>Open the link from the email, then continue below.</em></p>
+    </fieldset>
+
+    <fieldset>
+      <legend>2. Choose a resource &amp; day</legend>
+      <label for="resource">Resource</label>
+      <select id="resource"></select>
+      <label for="day">Day</label>
+      <input id="day" type="date" />
+      <button onclick="loadSlots()">Show available times</button>
+      <div id="slots"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>3. Result</legend>
+      <pre id="result">â€”</pre>
+    </fieldset>
+
+    <script>
+      const GQL = "/graphql";
+      async function gql(query, variables) {
+        const res = await fetch(GQL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables }),
+        });
+        return res.json();
+      }
+      function show(obj) {
+        document.getElementById("result").textContent = JSON.stringify(obj, null, 2);
+      }
+      async function loadResources() {
+        const r = await gql(`{ resources { id name timezone } }`);
+        const sel = document.getElementById("resource");
+        sel.innerHTML = "";
+        (r.data?.resources || []).forEach((res) => {
+          const opt = document.createElement("option");
+          opt.value = res.name;
+          opt.textContent = `${res.name} (${res.timezone})`;
+          sel.appendChild(opt);
+        });
+      }
+      async function startVerification() {
+        const email = document.getElementById("email").value;
+        const r = await gql(
+          `mutation($e:String!){ startVerification(email:$e){ ok message } }`,
+          { e: email }
+        );
+        show(r.data?.startVerification);
+      }
+      async function loadSlots() {
+        const resource = document.getElementById("resource").value;
+        const day = document.getElementById("day").value + "T00:00:00+00:00";
+        const r = await gql(
+          `query($r:String!,$d:DateTime!){ availableSlots(resource:$r, day:$d){ start end } }`,
+          { r: resource, d: day }
+        );
+        const box = document.getElementById("slots");
+        box.innerHTML = "";
+        (r.data?.availableSlots || []).forEach((s) => {
+          const b = document.createElement("button");
+          b.textContent = new Date(s.start).toLocaleString();
+          b.onclick = () => book(resource, s.start, s.end);
+          box.appendChild(b);
+        });
+        if (!(r.data?.availableSlots || []).length) box.textContent = "No slots available.";
+      }
+      async function book(resource, start, end) {
+        const email = document.getElementById("email").value;
+        const r = await gql(
+          `mutation($r:String!,$e:String!,$s:DateTime!,$en:DateTime!){
+             requestAppointment(resource:$r, email:$e, start:$s, end:$en){ ok message bookingId }
+           }`,
+          { r: resource, e: email, s: start, en: end }
+        );
+        show(r.data?.requestAppointment);
+      }
+      loadResources();
+    </script>
+  </body>
+</html>

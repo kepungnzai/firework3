@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv venv --python 3.12
+
+      - name: Install dependencies
+        run: |
+          uv pip install pytest pytest-asyncio ruff \
+            -e services/shared \
+            -e services/agent-orchestrator \
+            -e services/web-form
+
+      - name: Lint
+        run: uv run ruff check services mcp-servers db
+
+      - name: Run agent orchestrator tests
+        working-directory: services/agent-orchestrator
+        run: uv run pytest -q
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt & validate
+        working-directory: infrastructure
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false
+          terraform validate
+
+  build-images:
+    runs-on: ubuntu-latest
+    needs: [test]
+    strategy:
+      matrix:
+        include:
+          - name: web-form
+            dockerfile: services/web-form/Dockerfile
+          - name: agent-orchestrator
+            dockerfile: services/agent-orchestrator/Dockerfile
+          - name: mcp-resource-details
+            dockerfile: mcp-servers/mcp-resource-details/Dockerfile
+          - name: mcp-calendar
+            dockerfile: mcp-servers/mcp-calendar/Dockerfile
+          - name: mcp-email
+            dockerfile: mcp-servers/mcp-email/Dockerfile
+          - name: db-migrate
+            dockerfile: db/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (${{ matrix.name }})
+        run: docker build -f ${{ matrix.dockerfile }} -t ${{ matrix.name }}:ci .

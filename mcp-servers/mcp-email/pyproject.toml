@@ -1,0 +1,24 @@
+[project]
+name = "mcp-email"
+version = "0.1.0"
+description = "Remote MCP server for sending email (Gmail + fake provider)"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2",
+    "apptshared",
+    "google-api-python-client>=2.130",
+    "google-auth>=2.30",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server.py", "providers"]
+
+[tool.uv.sources]
+apptshared = { path = "../../services/shared", editable = true }

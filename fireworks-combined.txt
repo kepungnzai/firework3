@@ -1,0 +1,5724 @@
+﻿================================================================================
+Combined source for: fireworks (repository root)
+Generated: 2026-07-11
+================================================================================
+
+Contents:
+  1. .env.example
+  2. .github/workflows/ci.yml
+  3. .github/workflows/deploy.yml
+  4. .gitignore
+  5. .vscode/settings.json
+  6. db/alembic.ini
+  7. db/Dockerfile
+  8. db/migrations/env.py
+  9. db/migrations/script.py.mako
+  10. db/migrations/versions/0001_initial.py
+  11. db/seed.py
+  12. deploy/helm/Chart.yaml
+  13. deploy/helm/templates/_helpers.tpl
+  14. deploy/helm/templates/agent-orchestrator.yaml
+  15. deploy/helm/templates/mcp-servers.yaml
+  16. deploy/helm/templates/migrate-job.yaml
+  17. deploy/helm/templates/web-form.yaml
+  18. deploy/helm/values.yaml
+  19. docker-compose.yml
+  20. infrastructure/.terraform.lock.hcl
+  21. infrastructure/environments/dev.tfvars
+  22. infrastructure/environments/prod.tfvars
+  23. infrastructure/main.tf
+  24. infrastructure/outputs.tf
+  25. infrastructure/providers.tf
+  26. infrastructure/variables.tf
+  27. infrastructure/versions.tf
+  28. Makefile
+  29. mcp-servers/mcp-calendar/Dockerfile
+  30. mcp-servers/mcp-calendar/providers/__init__.py
+  31. mcp-servers/mcp-calendar/pyproject.toml
+  32. mcp-servers/mcp-calendar/server.py
+  33. mcp-servers/mcp-email/Dockerfile
+  34. mcp-servers/mcp-email/providers/__init__.py
+  35. mcp-servers/mcp-email/pyproject.toml
+  36. mcp-servers/mcp-email/server.py
+  37. mcp-servers/mcp-resource-details/Dockerfile
+  38. mcp-servers/mcp-resource-details/pyproject.toml
+  39. mcp-servers/mcp-resource-details/server.py
+  40. README.md
+  41. services/agent-orchestrator/app/__init__.py
+  42. services/agent-orchestrator/app/agent.py
+  43. services/agent-orchestrator/app/agent_llm.py
+  44. services/agent-orchestrator/app/audit.py
+  45. services/agent-orchestrator/app/consumer.py
+  46. services/agent-orchestrator/app/firewall.py
+  47. services/agent-orchestrator/app/guardrail.py
+  48. services/agent-orchestrator/app/llm.py
+  49. services/agent-orchestrator/app/repository.py
+  50. services/agent-orchestrator/app/state_machine.py
+  51. services/agent-orchestrator/app/tools.py
+  52. services/agent-orchestrator/app/workflow.py
+  53. services/agent-orchestrator/Dockerfile
+  54. services/agent-orchestrator/pyproject.toml
+  55. services/agent-orchestrator/pytest.ini
+  56. services/agent-orchestrator/scripts/__init__.py
+  57. services/agent-orchestrator/scripts/inject.py
+  58. services/agent-orchestrator/tests/__init__.py
+  59. services/agent-orchestrator/tests/conftest.py
+  60. services/agent-orchestrator/tests/scenarios/appointment_happy_path.json
+  61. services/agent-orchestrator/tests/scenarios/cancellation_then_reschedule_offer.json
+  62. services/agent-orchestrator/tests/scenarios/reschedule_to_taken_slot_rejected.json
+  63. services/agent-orchestrator/tests/test_guardrail.py
+  64. services/agent-orchestrator/tests/test_orchestration.py
+  65. services/agent-orchestrator/tests/test_scenarios.py
+  66. services/agent-orchestrator/tests/test_state_machine.py
+  67. services/shared/apptshared/__init__.py
+  68. services/shared/apptshared/config.py
+  69. services/shared/apptshared/db.py
+  70. services/shared/apptshared/mcpclient.py
+  71. services/shared/apptshared/models.py
+  72. services/shared/apptshared/queue.py
+  73. services/shared/apptshared/schemas.py
+  74. services/shared/apptshared/timeutils.py
+  75. services/shared/pyproject.toml
+  76. services/web-form/app/__init__.py
+  77. services/web-form/app/auth.py
+  78. services/web-form/app/availability.py
+  79. services/web-form/app/bookings.py
+  80. services/web-form/app/main.py
+  81. services/web-form/app/schema.py
+  82. services/web-form/app/static/index.html
+  83. services/web-form/Dockerfile
+  84. services/web-form/pyproject.toml
+
+
+################################################################################
+# FILE: .env.example
+################################################################################
+
+# -----------------------------------------------------------------------------
+# Appointment Scheduling Agent â€” example environment configuration
+# Copy to `.env` and fill in real values. Never commit `.env`.
+# -----------------------------------------------------------------------------
+
+# --- Core ---
+ENVIRONMENT=local
+LOG_LEVEL=INFO
+
+# When true, MCP calendar/email tools use in-memory FAKE providers (no Google
+# calls) and the agent uses a local model adapter. Ideal for tests & demos.
+FAKE_PROVIDERS=true
+
+# --- Database (Postgres = system of record) ---
+DATABASE_URL=postgresql+psycopg://appt:appt@localhost:5432/appointments
+
+# --- Scheduling defaults ---
+DEFAULT_OPENING_START=09:00
+DEFAULT_OPENING_END=17:00
+SLOT_MINUTES=30
+DEFAULT_TIMEZONE=UTC
+
+# --- Message queue (Azure Service Bus). For local dev a stub queue is used
+#     automatically when FAKE_PROVIDERS=true. ---
+SERVICE_BUS_CONNECTION_STRING=
+SERVICE_BUS_QUEUE_NAME=appointment-requests
+
+# --- Remote MCP server URLs (Streamable HTTP) ---
+MCP_RESOURCE_DETAILS_URL=http://localhost:8081/mcp
+MCP_CALENDAR_URL=http://localhost:8082/mcp
+MCP_EMAIL_URL=http://localhost:8083/mcp
+# Shared API key the agent presents to the remote MCP servers.
+MCP_API_KEY=local-dev-key
+
+# --- Magic-link auth ---
+MAGIC_LINK_SECRET=change-me-in-prod
+MAGIC_LINK_TTL_MINUTES=15
+PUBLIC_BASE_URL=http://localhost:8080
+
+# --- Google (only used when FAKE_PROVIDERS=false) ---
+GOOGLE_CREDENTIALS_FILE=credentials.json
+GOOGLE_TOKEN_FILE=token.json
+GMAIL_SENDER=appointments@example.com
+
+# --- Azure AI Foundry (only used when FAKE_PROVIDERS=false) ---
+AZURE_AI_PROJECT_ENDPOINT=
+AZURE_AI_AGENT_MODEL=gpt-4o-mini
+
+################################################################################
+# FILE: .github/workflows/ci.yml
+################################################################################
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv venv --python 3.12
+
+      - name: Install dependencies
+        run: |
+          uv pip install pytest pytest-asyncio ruff \
+            -e services/shared \
+            -e services/agent-orchestrator \
+            -e services/web-form
+
+      - name: Lint
+        run: uv run ruff check services mcp-servers db
+
+      - name: Run agent orchestrator tests
+        working-directory: services/agent-orchestrator
+        run: uv run pytest -q
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt & validate
+        working-directory: infrastructure
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false
+          terraform validate
+
+  build-images:
+    runs-on: ubuntu-latest
+    needs: [test]
+    strategy:
+      matrix:
+        include:
+          - name: web-form
+            dockerfile: services/web-form/Dockerfile
+          - name: agent-orchestrator
+            dockerfile: services/agent-orchestrator/Dockerfile
+          - name: mcp-resource-details
+            dockerfile: mcp-servers/mcp-resource-details/Dockerfile
+          - name: mcp-calendar
+            dockerfile: mcp-servers/mcp-calendar/Dockerfile
+          - name: mcp-email
+            dockerfile: mcp-servers/mcp-email/Dockerfile
+          - name: db-migrate
+            dockerfile: db/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (${{ matrix.name }})
+        run: docker build -f ${{ matrix.dockerfile }} -t ${{ matrix.name }}:ci .
+
+################################################################################
+# FILE: .github/workflows/deploy.yml
+################################################################################
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: dev
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  id-token: write # required for Azure OIDC login
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-appt-dev
+  AKS_CLUSTER: aks-appt-dev
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    strategy:
+      matrix:
+        include:
+          - name: web-form
+            dockerfile: services/web-form/Dockerfile
+          - name: agent-orchestrator
+            dockerfile: services/agent-orchestrator/Dockerfile
+          - name: mcp-resource-details
+            dockerfile: mcp-servers/mcp-resource-details/Dockerfile
+          - name: mcp-calendar
+            dockerfile: mcp-servers/mcp-calendar/Dockerfile
+          - name: mcp-email
+            dockerfile: mcp-servers/mcp-email/Dockerfile
+          - name: db-migrate
+            dockerfile: db/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Compute tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: ACR login
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Build & push (${{ matrix.name }})
+        run: |
+          IMAGE=${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.name }}:${{ steps.meta.outputs.tag }}
+          docker build -f ${{ matrix.dockerfile }} -t "$IMAGE" .
+          docker push "$IMAGE"
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        run: az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_CLUSTER
+
+      - name: Helm upgrade
+        run: |
+          helm upgrade --install appointment-scheduler deploy/helm \
+            --namespace appointments --create-namespace \
+            --set image.registry=${{ secrets.ACR_LOGIN_SERVER }} \
+            --set image.tag=${{ needs.build-and-push.outputs.tag }} \
+            --set fakeProviders=false \
+            --wait
+
+################################################################################
+# FILE: .gitignore
+################################################################################
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Env / secrets
+.env
+*.local.env
+credentials.json
+token.json
+service-account*.json
+
+# Terraform
+infrastructure/**/.terraform/
+infrastructure/**/*.tfstate
+infrastructure/**/*.tfstate.*
+infrastructure/**/*.tfplan
+infrastructure/**/.terraform.lock.hcl
+
+# Node (MCP inspector)
+node_modules/
+
+# IDE / OS
+.DS_Store
+.idea/
+*.swp
+
+################################################################################
+# FILE: .vscode/settings.json
+################################################################################
+
+{
+    "workbench.colorCustomizations": {
+        "activityBar.activeBackground": "#fbed80",
+        "activityBar.background": "#fbed80",
+        "activityBar.foreground": "#15202b",
+        "activityBar.inactiveForeground": "#15202b99",
+        "activityBarBadge.background": "#06b9a5",
+        "activityBarBadge.foreground": "#15202b",
+        "commandCenter.border": "#15202b99",
+        "sash.hoverBorder": "#fbed80",
+        "statusBar.background": "#f9e64f",
+        "statusBar.foreground": "#15202b",
+        "statusBarItem.hoverBackground": "#f7df1e",
+        "statusBarItem.remoteBackground": "#f9e64f",
+        "statusBarItem.remoteForeground": "#15202b",
+        "titleBar.activeBackground": "#f9e64f",
+        "titleBar.activeForeground": "#15202b",
+        "titleBar.inactiveBackground": "#f9e64f99",
+        "titleBar.inactiveForeground": "#15202b99"
+    },
+    "peacock.color": "#f9e64f"
+}
+
+################################################################################
+# FILE: db/alembic.ini
+################################################################################
+
+[alembic]
+script_location = migrations
+prepend_sys_path = .
+sqlalchemy.url = driver://user:pass@localhost/dbname
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+
+################################################################################
+# FILE: db/Dockerfile
+################################################################################
+
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY services/shared /app/services/shared
+COPY db /app/db
+
+RUN pip install --no-cache-dir /app/services/shared alembic
+
+WORKDIR /app/db
+
+CMD ["sh", "-c", "alembic upgrade head && python seed.py"]
+
+################################################################################
+# FILE: db/migrations/env.py
+################################################################################
+
+"""Alembic environment. Uses the shared ORM metadata and DATABASE_URL."""
+
+from __future__ import annotations
+
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+from apptshared.config import get_settings
+from apptshared.models import Base
+
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+config.set_main_option("sqlalchemy.url", get_settings().database_url)
+target_metadata = Base.metadata
+
+
+def run_migrations_offline() -> None:
+    context.configure(
+        url=config.get_main_option("sqlalchemy.url"),
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        context.configure(connection=connection, target_metadata=target_metadata)
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+
+################################################################################
+# FILE: db/migrations/script.py.mako
+################################################################################
+
+"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+${imports if imports else ""}
+
+revision: str = ${repr(up_revision)}
+down_revision: Union[str, None] = ${repr(down_revision)}
+branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
+depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
+
+
+def upgrade() -> None:
+    ${upgrades if upgrades else "pass"}
+
+
+def downgrade() -> None:
+    ${downgrades if downgrades else "pass"}
+
+################################################################################
+# FILE: db/migrations/versions/0001_initial.py
+################################################################################
+
+"""initial schema
+
+Revision ID: 0001_initial
+Revises:
+Create Date: 2026-07-10
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+revision: str = "0001_initial"
+down_revision: Union[str, None] = None
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "resources",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("name", sa.String(), nullable=False, unique=True),
+        sa.Column("email", sa.String(), nullable=False),
+        sa.Column("calendar_id", sa.String(), nullable=False),
+        sa.Column("timezone", sa.String(), nullable=False, server_default="UTC"),
+        sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.true()),
+    )
+
+    op.create_table(
+        "opening_hours",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("scope", sa.String(), nullable=False),
+        sa.Column("resource_id", sa.String(), sa.ForeignKey("resources.id"), nullable=True),
+        sa.Column("day_of_week", sa.Integer(), nullable=False),
+        sa.Column("start_time", sa.Time(), nullable=False),
+        sa.Column("end_time", sa.Time(), nullable=False),
+    )
+
+    op.create_table(
+        "patients",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("email", sa.String(), nullable=False, unique=True),
+        sa.Column("name", sa.String(), nullable=True),
+        sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+    op.create_table(
+        "magic_link_tokens",
+        sa.Column("token", sa.String(), primary_key=True),
+        sa.Column("email", sa.String(), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("used_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+    op.create_table(
+        "bookings",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("patient_id", sa.String(), sa.ForeignKey("patients.id"), nullable=False),
+        sa.Column("resource_id", sa.String(), sa.ForeignKey("resources.id"), nullable=False),
+        sa.Column("start_utc", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("end_utc", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("status", sa.String(), nullable=False, server_default="pending"),
+        sa.Column("gcal_event_id", sa.String(), nullable=True),
+        sa.Column("idempotency_key", sa.String(), nullable=False, unique=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+    )
+    op.create_index(
+        "uq_active_booking_slot",
+        "bookings",
+        ["resource_id", "start_utc"],
+        unique=True,
+        postgresql_where=sa.text("status IN ('pending','confirmed')"),
+    )
+
+    op.create_table(
+        "workflow_events",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("booking_id", sa.String(), sa.ForeignKey("bookings.id"), nullable=False),
+        sa.Column("seq", sa.Integer(), nullable=False),
+        sa.Column("correlation_id", sa.String(), nullable=False),
+        sa.Column("event_type", sa.String(), nullable=False),
+        sa.Column("from_state", sa.String(), nullable=True),
+        sa.Column("to_state", sa.String(), nullable=True),
+        sa.Column("actor", sa.String(), nullable=False),
+        sa.Column("tool_name", sa.String(), nullable=True),
+        sa.Column("request_payload", sa.JSON(), nullable=True),
+        sa.Column("result", sa.JSON(), nullable=True),
+        sa.Column("outcome", sa.String(), nullable=False),
+        sa.Column("reason", sa.String(), nullable=True),
+        sa.Column("occurred_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.UniqueConstraint("booking_id", "seq", name="uq_booking_event_seq"),
+    )
+
+
+def downgrade() -> None:
+    op.drop_table("workflow_events")
+    op.drop_index("uq_active_booking_slot", table_name="bookings")
+    op.drop_table("bookings")
+    op.drop_table("magic_link_tokens")
+    op.drop_table("patients")
+    op.drop_table("opening_hours")
+    op.drop_table("resources")
+
+################################################################################
+# FILE: db/seed.py
+################################################################################
+
+"""Seed baseline data: two resources and org opening hours 09:00-17:00 Mon-Fri.
+
+Idempotent: safe to run repeatedly.
+"""
+
+from __future__ import annotations
+
+from datetime import time
+
+from sqlalchemy import select
+
+from apptshared.db import session_scope
+from apptshared.models import OpeningHours, Resource
+
+RESOURCES = [
+    Resource(
+        id="dr-lee",
+        name="Dr Lee",
+        email="dr.lee@example.com",
+        calendar_id="dr-lee@group.calendar.google.com",
+        timezone="Australia/Sydney",
+        active=True,
+    ),
+    Resource(
+        id="dr-patel",
+        name="Dr Patel",
+        email="dr.patel@example.com",
+        calendar_id="dr-patel@group.calendar.google.com",
+        timezone="Australia/Sydney",
+        active=True,
+    ),
+]
+
+
+def run() -> None:
+    for session in session_scope():
+        for res in RESOURCES:
+            exists = session.get(Resource, res.id)
+            if not exists:
+                session.add(res)
+
+        # Org opening hours Mon(0)-Fri(4) 09:00-17:00
+        has_hours = session.execute(
+            select(OpeningHours).where(OpeningHours.scope == "org")
+        ).first()
+        if not has_hours:
+            for dow in range(0, 5):
+                session.add(
+                    OpeningHours(
+                        scope="org",
+                        resource_id=None,
+                        day_of_week=dow,
+                        start_time=time(9, 0),
+                        end_time=time(17, 0),
+                    )
+                )
+
+
+if __name__ == "__main__":
+    run()
+    print("Seed complete.")
+
+################################################################################
+# FILE: deploy/helm/Chart.yaml
+################################################################################
+
+apiVersion: v2
+name: appointment-scheduler
+description: Appointment Scheduling Agent - web-form, agent-orchestrator, and MCP tools
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+################################################################################
+# FILE: deploy/helm/templates/_helpers.tpl
+################################################################################
+
+{{- define "appt.commonEnv" -}}
+- name: FAKE_PROVIDERS
+  value: "{{ .Values.fakeProviders }}"
+- name: MCP_RESOURCE_DETAILS_URL
+  value: "{{ .Values.env.MCP_RESOURCE_DETAILS_URL }}"
+- name: MCP_CALENDAR_URL
+  value: "{{ .Values.env.MCP_CALENDAR_URL }}"
+- name: MCP_EMAIL_URL
+  value: "{{ .Values.env.MCP_EMAIL_URL }}"
+- name: SERVICE_BUS_QUEUE_NAME
+  value: "{{ .Values.env.SERVICE_BUS_QUEUE_NAME }}"
+- name: PUBLIC_BASE_URL
+  value: "{{ .Values.env.PUBLIC_BASE_URL }}"
+- name: DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secretName }}
+      key: DATABASE_URL
+- name: SERVICE_BUS_CONNECTION_STRING
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secretName }}
+      key: SERVICE_BUS_CONNECTION_STRING
+- name: MCP_API_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.secretName }}
+      key: MCP_API_KEY
+{{- end -}}
+
+################################################################################
+# FILE: deploy/helm/templates/agent-orchestrator.yaml
+################################################################################
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-orchestrator
+  labels:
+    app: agent-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-orchestrator
+  template:
+    metadata:
+      labels:
+        app: agent-orchestrator
+    spec:
+      containers:
+        - name: agent-orchestrator
+          image: "{{ .Values.image.registry }}/agent-orchestrator:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+{{ include "appt.commonEnv" . | indent 12 }}
+            - name: AZURE_AI_PROJECT_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: AZURE_AI_PROJECT_ENDPOINT
+                  optional: true
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+
+################################################################################
+# FILE: deploy/helm/templates/mcp-servers.yaml
+################################################################################
+
+{{- range $name, $port := dict "mcp-resource-details" 8081 "mcp-calendar" 8082 "mcp-email" 8083 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app: {{ $name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: "{{ $.Values.image.registry }}/{{ $name }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ $port }}
+          env:
+{{ include "appt.commonEnv" $ | indent 12 }}
+          resources:
+{{ toYaml $.Values.resources | indent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - port: {{ $port }}
+      targetPort: {{ $port }}
+{{- end }}
+
+################################################################################
+# FILE: deploy/helm/templates/migrate-job.yaml
+################################################################################
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate-{{ .Release.Revision }}
+  labels:
+    app: db-migrate
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: db-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.registry }}/db-migrate:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: DATABASE_URL
+
+################################################################################
+# FILE: deploy/helm/templates/web-form.yaml
+################################################################################
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-form
+  labels:
+    app: web-form
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-form
+  template:
+    metadata:
+      labels:
+        app: web-form
+    spec:
+      containers:
+        - name: web-form
+          image: "{{ .Values.image.registry }}/web-form:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+{{ include "appt.commonEnv" . | indent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-form
+spec:
+  selector:
+    app: web-form
+  ports:
+    - port: 80
+      targetPort: 8080
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-form
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-form
+                port:
+                  number: 80
+{{- end }}
+
+################################################################################
+# FILE: deploy/helm/values.yaml
+################################################################################
+
+# Values for the appointment-scheduler chart.
+image:
+  registry: myacr.azurecr.io
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Set to "false" in production to use real Google/Azure providers.
+fakeProviders: "true"
+
+# Provided via a Kubernetes Secret synced from Key Vault (CSI driver) in prod.
+secretName: appointment-secrets
+
+env:
+  MCP_RESOURCE_DETAILS_URL: http://mcp-resource-details:8081/mcp
+  MCP_CALENDAR_URL: http://mcp-calendar:8082/mcp
+  MCP_EMAIL_URL: http://mcp-email:8083/mcp
+  SERVICE_BUS_QUEUE_NAME: appointment-requests
+  PUBLIC_BASE_URL: https://appointments.example.com
+
+ingress:
+  enabled: true
+  host: appointments.example.com
+  className: nginx
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+################################################################################
+# FILE: docker-compose.yml
+################################################################################
+
+# Local development stack. Uses FAKE_PROVIDERS=true so no Google/Azure calls are
+# made â€” calendar/email use in-memory fakes and the agent uses deterministic
+# message text. The queue is a file-backed directory shared via a volume.
+name: appointment-scheduler
+
+x-common-env: &common-env
+  FAKE_PROVIDERS: "true"
+  DATABASE_URL: postgresql+psycopg://appt:appt@postgres:5432/appointments
+  MCP_RESOURCE_DETAILS_URL: http://mcp-resource-details:8081/mcp
+  MCP_CALENDAR_URL: http://mcp-calendar:8082/mcp
+  MCP_EMAIL_URL: http://mcp-email:8083/mcp
+  MCP_API_KEY: local-dev-key
+  LOCAL_QUEUE_DIR: /queue
+  PUBLIC_BASE_URL: http://localhost:8080
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: appt
+      POSTGRES_PASSWORD: appt
+      POSTGRES_DB: appointments
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appt -d appointments"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+    environment:
+      <<: *common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mcp-resource-details:
+    build:
+      context: .
+      dockerfile: mcp-servers/mcp-resource-details/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8081:8081"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  mcp-calendar:
+    build:
+      context: .
+      dockerfile: mcp-servers/mcp-calendar/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8082:8082"
+
+  mcp-email:
+    build:
+      context: .
+      dockerfile: mcp-servers/mcp-email/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8083:8083"
+
+  web-form:
+    build:
+      context: .
+      dockerfile: services/web-form/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8080:8080"
+    volumes:
+      - queue:/queue
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: services/agent-orchestrator/Dockerfile
+    environment:
+      <<: *common-env
+    volumes:
+      - queue:/queue
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  queue:
+
+################################################################################
+# FILE: infrastructure/.terraform.lock.hcl
+################################################################################
+
+# This file is maintained automatically by "terraform init".
+# Manual edits may be lost in future updates.
+
+provider "registry.terraform.io/hashicorp/azurerm" {
+  version     = "3.117.1"
+  constraints = "~> 3.116"
+  hashes = [
+    "h1:Y9J+emydHX7LpJYKdF9Zmng0zcRR86Awm/t28LNzb68=",
+    "zh:0c513676836e3c50d004ece7d2624a8aff6faac14b833b96feeac2e4bc2c1c12",
+    "zh:50ea01ada95bae2f187db9e926e463f45d860767a85ebc59160414e00e76c35d",
+    "zh:52c2a9edacc06b3f72153f5ef6daca0761c6292158815961fe37f60bc576a3d7",
+    "zh:618eed2a06b19b1a025b45b05891846d570a6a1cca4d23f4942f5a99e1f747ae",
+    "zh:61cde5d3165d7e5ec311d5d89486819cd605c1b2d54611b5c97bd4e97dba2762",
+    "zh:6a873358d5031fc222f5e05f029d1237f3dce8345c767665f393283dfa2627f6",
+    "zh:afdd80064b2a04da311856feb4ed45f77ff4df6c356e8c2b10afb51fe7e61c70",
+    "zh:b09113df7e0e8c8959539bd22bae6c39faeb269ba3c4cd948e742f5cf58c35fb",
+    "zh:d340db7973109761cfc27d52aa02560363337c908b2c99b3628adc5a70a99d5b",
+    "zh:d5a577226ebc8c65e8f19384878a86acc4b51ede4b4a82d37c3b331b0efcd4a7",
+    "zh:e2962b147f9e71732df8dbc74940c10d20906f3c003cbfaa1eb9fabbf601a9f0",
+    "zh:f569b65999264a9416862bca5cd2a6177d94ccb0424f3a4ef424428912b9cb3c",
+  ]
+}
+
+provider "registry.terraform.io/hashicorp/random" {
+  version     = "3.9.0"
+  constraints = "~> 3.6"
+  hashes = [
+    "h1:q/uaUTBdKgAmZESrwsoeDQff9uUA/cI/N5ZKNgVwa9c=",
+    "zh:161ad0bd9a75768c82f53fb6e7172a9d8be2d4889b012645a34795031aaf1bf1",
+    "zh:19dc9a5b17729725ccfc4f45b0500af0ee5bc6b6b160c7adb8f2bf617d2c80ea",
+    "zh:269eda8fe42daa7974d5a34d166c3ba9defe80cde86c01e4dadcfdf2e1f05e5f",
+    "zh:373f7c65566f8f2cc7f45d698654feb9d988996957e1266a69ca00c52d6d16d0",
+    "zh:5599d16804c41c83009ec621b6d6b6f74e102f5827678a4750f8809055546b61",
+    "zh:583be0440469a22bff70dcfa56593b01566860b29607437264adb51060cf46fc",
+    "zh:5f211d8ec3f2e1f414870d9584bfe26e6995560ef81c748f8447a48164767398",
+    "zh:78d5eefdd9e494defcb3c68d282b8f96630502cac21d1ea161f53cfe9bb483b3",
+    "zh:7b547fd16216761ef86efc3ed516ac5ac0c5c42b7c7eb24a08cef2d93f69ed5e",
+    "zh:7e7c0679daf2a382151d05068c8c3f0dae6b7b7dccf818827b73dd08638df2ef",
+    "zh:8089dec888a8038b9b4fb23b3df7e1057293dbc5b60b42cc47ff690d69d4b61b",
+    "zh:c51f15a031edfd6f23ce8ced3446ca7f8d8d647e2499890d7d5d10d5016d7257",
+    "zh:c94784f005708890dc6895afd53636ec00ec1e430b15d41e5aebfb1d4b39bd04",
+  ]
+}
+
+################################################################################
+# FILE: infrastructure/environments/dev.tfvars
+################################################################################
+
+environment    = "dev"
+location       = "australiaeast"
+project        = "appt"
+aks_node_count = 2
+aks_vm_size    = "Standard_D2s_v5"
+
+################################################################################
+# FILE: infrastructure/environments/prod.tfvars
+################################################################################
+
+environment    = "prod"
+location       = "australiaeast"
+project        = "appt"
+aks_node_count = 3
+aks_vm_size    = "Standard_D4s_v5"
+
+################################################################################
+# FILE: infrastructure/main.tf
+################################################################################
+
+# Root infrastructure for the Appointment Scheduling Agent.
+#
+# Provisions the full AKS stack: container registry, AKS cluster (with workload
+# identity), Postgres (system of record), Service Bus (agent queue), Key Vault
+# (secrets), and an Azure AI Foundry account for the orchestration agent.
+#
+# NOTE: The platform team publishes reusable modules at
+# git::ssh://git@ssh.dev.azure.com/v3/mmsgau/Common Platforms - Platform Engineering/mmsg.platform.terraform.modules/
+# Swap the inline resources below for those modules where an equivalent exists.
+
+locals {
+  name_prefix = "${var.project}-${var.environment}"
+
+  tags = merge(var.tags, {
+    environment = var.environment
+  })
+}
+
+resource "random_string" "suffix" {
+  length  = 5
+  special = false
+  upper   = false
+}
+
+resource "azurerm_resource_group" "this" {
+  name     = "rg-${local.name_prefix}"
+  location = var.location
+  tags     = local.tags
+}
+
+# --- Container registry ---
+resource "azurerm_container_registry" "this" {
+  name                = "acr${var.project}${var.environment}${random_string.suffix.result}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  sku                 = "Standard"
+  admin_enabled       = false
+  tags                = local.tags
+}
+
+# --- AKS cluster ---
+resource "azurerm_kubernetes_cluster" "this" {
+  name                = "aks-${local.name_prefix}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  dns_prefix          = local.name_prefix
+
+  default_node_pool {
+    name       = "system"
+    node_count = var.aks_node_count
+    vm_size    = var.aks_vm_size
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  workload_identity_enabled = true
+  oidc_issuer_enabled       = true
+
+  tags = local.tags
+}
+
+# Allow AKS to pull images from ACR.
+resource "azurerm_role_assignment" "aks_acr_pull" {
+  scope                            = azurerm_container_registry.this.id
+  role_definition_name             = "AcrPull"
+  principal_id                     = azurerm_kubernetes_cluster.this.kubelet_identity[0].object_id
+  skip_service_principal_aad_check = true
+}
+
+# --- Postgres (system of record) ---
+resource "random_password" "postgres" {
+  length  = 24
+  special = true
+}
+
+resource "azurerm_postgresql_flexible_server" "this" {
+  name                          = "psql-${local.name_prefix}-${random_string.suffix.result}"
+  resource_group_name           = azurerm_resource_group.this.name
+  location                      = azurerm_resource_group.this.location
+  version                       = "16"
+  administrator_login           = var.postgres_admin_login
+  administrator_password        = random_password.postgres.result
+  sku_name                      = var.postgres_sku_name
+  storage_mb                    = 32768
+  public_network_access_enabled = true
+  zone                          = "1"
+  tags                          = local.tags
+}
+
+resource "azurerm_postgresql_flexible_server_database" "appointments" {
+  name      = "appointments"
+  server_id = azurerm_postgresql_flexible_server.this.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+}
+
+# --- Service Bus (agent request queue) ---
+resource "azurerm_servicebus_namespace" "this" {
+  name                = "sb-${local.name_prefix}-${random_string.suffix.result}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  sku                 = "Standard"
+  tags                = local.tags
+}
+
+resource "azurerm_servicebus_queue" "appointment_requests" {
+  name         = "appointment-requests"
+  namespace_id = azurerm_servicebus_namespace.this.id
+
+  dead_lettering_on_message_expiration = true
+  max_delivery_count                   = 5
+}
+
+# --- Key Vault (secrets) ---
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault" "this" {
+  name                       = "kv-${var.project}${var.environment}${random_string.suffix.result}"
+  resource_group_name        = azurerm_resource_group.this.name
+  location                   = azurerm_resource_group.this.location
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  purge_protection_enabled   = false
+  soft_delete_retention_days = 7
+  enable_rbac_authorization  = true
+  tags                       = local.tags
+}
+
+# --- Azure AI Foundry (agent) ---
+resource "azurerm_cognitive_account" "ai_foundry" {
+  name                = "aif-${local.name_prefix}-${random_string.suffix.result}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  kind                = "AIServices"
+  sku_name            = var.ai_foundry_sku
+  tags                = local.tags
+}
+
+################################################################################
+# FILE: infrastructure/outputs.tf
+################################################################################
+
+output "resource_group_name" {
+  description = "Name of the resource group containing all resources."
+  value       = azurerm_resource_group.this.name
+}
+
+output "acr_login_server" {
+  description = "Login server hostname of the container registry (used by CI to push images)."
+  value       = azurerm_container_registry.this.login_server
+}
+
+output "aks_cluster_name" {
+  description = "Name of the AKS cluster (used by CI for `az aks get-credentials`)."
+  value       = azurerm_kubernetes_cluster.this.name
+}
+
+output "aks_oidc_issuer_url" {
+  description = "OIDC issuer URL of the AKS cluster, required for workload identity federation."
+  value       = azurerm_kubernetes_cluster.this.oidc_issuer_url
+}
+
+output "postgres_fqdn" {
+  description = "Fully qualified domain name of the Postgres Flexible Server."
+  value       = azurerm_postgresql_flexible_server.this.fqdn
+}
+
+output "servicebus_namespace" {
+  description = "Service Bus namespace hosting the appointment-requests queue."
+  value       = azurerm_servicebus_namespace.this.name
+}
+
+output "key_vault_uri" {
+  description = "URI of the Key Vault holding application secrets."
+  value       = azurerm_key_vault.this.vault_uri
+}
+
+output "ai_foundry_endpoint" {
+  description = "Endpoint of the Azure AI Foundry account for the orchestration agent."
+  value       = azurerm_cognitive_account.ai_foundry.endpoint
+}
+
+################################################################################
+# FILE: infrastructure/providers.tf
+################################################################################
+
+provider "azurerm" {
+  features {}
+}
+
+################################################################################
+# FILE: infrastructure/variables.tf
+################################################################################
+
+variable "location" {
+  description = "Azure region for all resources."
+  type        = string
+  default     = "australiaeast"
+}
+
+variable "environment" {
+  description = "Deployment environment name (e.g. dev, prod). Used in resource names and tags."
+  type        = string
+}
+
+variable "project" {
+  description = "Short project prefix used to name resources."
+  type        = string
+  default     = "appt"
+}
+
+variable "aks_node_count" {
+  description = "Number of nodes in the default AKS node pool."
+  type        = number
+  default     = 2
+}
+
+variable "aks_vm_size" {
+  description = "VM size for AKS default node pool."
+  type        = string
+  default     = "Standard_D2s_v5"
+}
+
+variable "postgres_admin_login" {
+  description = "Administrator login for the Postgres Flexible Server."
+  type        = string
+  default     = "apptadmin"
+}
+
+variable "postgres_sku_name" {
+  description = "SKU name for the Postgres Flexible Server."
+  type        = string
+  default     = "B_Standard_B1ms"
+}
+
+variable "ai_foundry_sku" {
+  description = "SKU for the Azure AI Foundry (Cognitive Services) account."
+  type        = string
+  default     = "S0"
+}
+
+variable "tags" {
+  description = "Common tags applied to all resources."
+  type        = map(string)
+  default = {
+    application = "appointment-scheduler"
+    managed_by  = "terraform"
+  }
+}
+
+################################################################################
+# FILE: infrastructure/versions.tf
+################################################################################
+
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.116"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+
+################################################################################
+# FILE: Makefile
+################################################################################
+
+# Developer convenience targets.
+# On Windows, run these with `make` from Git Bash / WSL, or copy the commands.
+
+PY := .venv/Scripts/python.exe
+
+.PHONY: help venv install test lint up down seed inject-appointment inject-cancel inject-reschedule inspect-resources inspect-calendar inspect-email
+
+help:
+	@echo "Targets: venv install test lint up down inject-* inspect-*"
+
+venv:
+	uv venv .venv --python 3.12
+
+install:
+	uv pip install --python .venv pytest pytest-asyncio ruff \
+		-e services/shared -e services/agent-orchestrator -e services/web-form
+
+test:
+	cd services/agent-orchestrator && ../../$(PY) -m pytest -q
+
+lint:
+	uv run ruff check services mcp-servers db
+
+up:
+	docker compose up --build -d
+
+down:
+	docker compose down -v
+
+# --- Inject-a-message CLI (fastest agent test loop) ---
+inject-appointment:
+	cd services/agent-orchestrator && ../../$(PY) -m scripts.inject appointment \
+		--resource "Dr Lee" --email you@example.com --start 2026-07-13T09:00:00+10:00 --run
+
+inject-cancel:
+	cd services/agent-orchestrator && ../../$(PY) -m scripts.inject cancellation \
+		--booking $(BOOKING) --email you@example.com --run
+
+inject-reschedule:
+	cd services/agent-orchestrator && ../../$(PY) -m scripts.inject reschedule \
+		--booking $(BOOKING) --email you@example.com \
+		--start 2026-07-13T09:00:00+10:00 --new-start 2026-07-13T14:00:00+10:00 --run
+
+# --- MCP Inspector (bundled via npx) ---
+inspect-resources:
+	npx @modelcontextprotocol/inspector http://localhost:8081/mcp
+
+inspect-calendar:
+	npx @modelcontextprotocol/inspector http://localhost:8082/mcp
+
+inspect-email:
+	npx @modelcontextprotocol/inspector http://localhost:8083/mcp
+
+################################################################################
+# FILE: mcp-servers/mcp-calendar/Dockerfile
+################################################################################
+
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY services/shared /app/services/shared
+COPY mcp-servers/mcp-calendar /app/mcp-servers/mcp-calendar
+
+RUN pip install --no-cache-dir /app/services/shared /app/mcp-servers/mcp-calendar
+
+WORKDIR /app/mcp-servers/mcp-calendar
+EXPOSE 8082
+
+CMD ["python", "server.py"]
+
+################################################################################
+# FILE: mcp-servers/mcp-calendar/providers/__init__.py
+################################################################################
+
+"""Calendar provider abstraction.
+
+`CalendarProvider` is the interface the MCP tools call. Google is the default
+implementation; `FakeCalendarProvider` is an in-memory implementation used for
+tests and demos (FAKE_PROVIDERS=true) so no external calls are made.
+"""
+
+from __future__ import annotations
+
+import uuid
+from abc import ABC, abstractmethod
+from datetime import datetime
+
+
+class CalendarProvider(ABC):
+    @abstractmethod
+    def get_busy_slots(
+        self, calendar_id: str, start: datetime, end: datetime
+    ) -> list[dict]:
+        """Return busy intervals [{"start": iso, "end": iso}] in the window."""
+
+    @abstractmethod
+    def create_event(
+        self,
+        calendar_id: str,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        attendees: list[str] | None = None,
+    ) -> str:
+        """Create an event; return the provider event id."""
+
+    @abstractmethod
+    def cancel_event(self, calendar_id: str, event_id: str) -> bool:
+        """Delete an event. Returns True on success."""
+
+    @abstractmethod
+    def update_event(
+        self, calendar_id: str, event_id: str, start: datetime, end: datetime
+    ) -> bool:
+        """Move an existing event to a new window."""
+
+
+class FakeCalendarProvider(CalendarProvider):
+    """In-memory calendar keyed by calendar_id. Deterministic for tests."""
+
+    def __init__(self) -> None:
+        # calendar_id -> {event_id: {"start", "end", "summary"}}
+        self._events: dict[str, dict[str, dict]] = {}
+
+    def _cal(self, calendar_id: str) -> dict[str, dict]:
+        return self._events.setdefault(calendar_id, {})
+
+    def get_busy_slots(
+        self, calendar_id: str, start: datetime, end: datetime
+    ) -> list[dict]:
+        busy = []
+        for ev in self._cal(calendar_id).values():
+            if ev["start"] < end and start < ev["end"]:
+                busy.append(
+                    {"start": ev["start"].isoformat(), "end": ev["end"].isoformat()}
+                )
+        return sorted(busy, key=lambda b: b["start"])
+
+    def create_event(
+        self,
+        calendar_id: str,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        attendees: list[str] | None = None,
+    ) -> str:
+        event_id = f"evt-{uuid.uuid4().hex[:12]}"
+        self._cal(calendar_id)[event_id] = {
+            "start": start,
+            "end": end,
+            "summary": summary,
+            "attendees": attendees or [],
+        }
+        return event_id
+
+    def cancel_event(self, calendar_id: str, event_id: str) -> bool:
+        return self._cal(calendar_id).pop(event_id, None) is not None
+
+    def update_event(
+        self, calendar_id: str, event_id: str, start: datetime, end: datetime
+    ) -> bool:
+        ev = self._cal(calendar_id).get(event_id)
+        if not ev:
+            return False
+        ev["start"] = start
+        ev["end"] = end
+        return True
+
+
+class GoogleCalendarProvider(CalendarProvider):
+    """Google Calendar implementation using the official Python client."""
+
+    def __init__(self, credentials_file: str, token_file: str) -> None:
+        self._credentials_file = credentials_file
+        self._token_file = token_file
+        self._service = None
+
+    def _svc(self):
+        if self._service is None:
+            from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
+
+            creds = Credentials.from_authorized_user_file(
+                self._token_file,
+                scopes=["https://www.googleapis.com/auth/calendar"],
+            )
+            self._service = build("calendar", "v3", credentials=creds)
+        return self._service
+
+    def get_busy_slots(
+        self, calendar_id: str, start: datetime, end: datetime
+    ) -> list[dict]:
+        body = {
+            "timeMin": start.isoformat(),
+            "timeMax": end.isoformat(),
+            "items": [{"id": calendar_id}],
+        }
+        resp = self._svc().freebusy().query(body=body).execute()
+        return resp["calendars"][calendar_id].get("busy", [])
+
+    def create_event(
+        self,
+        calendar_id: str,
+        summary: str,
+        start: datetime,
+        end: datetime,
+        attendees: list[str] | None = None,
+    ) -> str:
+        event = {
+            "summary": summary,
+            "start": {"dateTime": start.isoformat()},
+            "end": {"dateTime": end.isoformat()},
+            "attendees": [{"email": a} for a in (attendees or [])],
+        }
+        created = (
+            self._svc().events().insert(calendarId=calendar_id, body=event).execute()
+        )
+        return created["id"]
+
+    def cancel_event(self, calendar_id: str, event_id: str) -> bool:
+        self._svc().events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        return True
+
+    def update_event(
+        self, calendar_id: str, event_id: str, start: datetime, end: datetime
+    ) -> bool:
+        body = {
+            "start": {"dateTime": start.isoformat()},
+            "end": {"dateTime": end.isoformat()},
+        }
+        self._svc().events().patch(
+            calendarId=calendar_id, eventId=event_id, body=body
+        ).execute()
+        return True
+
+
+def build_provider() -> CalendarProvider:
+    from apptshared.config import get_settings
+
+    settings = get_settings()
+    if settings.fake_providers:
+        return get_shared_fake()
+    return GoogleCalendarProvider(
+        settings.google_credentials_file, settings.google_token_file
+    )
+
+
+# A single process-wide fake so busy/create/cancel see the same state.
+_SHARED_FAKE: FakeCalendarProvider | None = None
+
+
+def get_shared_fake() -> FakeCalendarProvider:
+    global _SHARED_FAKE
+    if _SHARED_FAKE is None:
+        _SHARED_FAKE = FakeCalendarProvider()
+    return _SHARED_FAKE
+
+################################################################################
+# FILE: mcp-servers/mcp-calendar/pyproject.toml
+################################################################################
+
+[project]
+name = "mcp-calendar"
+version = "0.1.0"
+description = "Remote MCP server for calendar operations (Google Calendar + fake provider)"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2",
+    "apptshared",
+    "google-api-python-client>=2.130",
+    "google-auth>=2.30",
+    "google-auth-oauthlib>=1.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server.py", "providers"]
+
+[tool.uv.sources]
+apptshared = { path = "../../services/shared", editable = true }
+
+################################################################################
+# FILE: mcp-servers/mcp-calendar/server.py
+################################################################################
+
+"""Remote MCP server: Google Calendar operations.
+
+Tools:
+- get_busy_slots(calendar_id, start_iso, end_iso)
+- create_event(calendar_id, summary, start_iso, end_iso, attendees)
+- cancel_event(calendar_id, event_id)
+- update_event(calendar_id, event_id, start_iso, end_iso)
+
+Uses the provider abstraction: real Google Calendar by default, in-memory fake
+when FAKE_PROVIDERS=true.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+
+from mcp.server.fastmcp import FastMCP
+
+from providers import build_provider
+
+mcp = FastMCP("calendar", host="0.0.0.0", port=8082)
+_provider = build_provider()
+
+
+def _dt(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+@mcp.tool()
+def get_busy_slots(calendar_id: str, start_iso: str, end_iso: str) -> list[dict]:
+    """Return busy intervals for a calendar within [start, end)."""
+    return _provider.get_busy_slots(calendar_id, _dt(start_iso), _dt(end_iso))
+
+
+@mcp.tool()
+def create_event(
+    calendar_id: str,
+    summary: str,
+    start_iso: str,
+    end_iso: str,
+    attendees: list[str] | None = None,
+) -> dict:
+    """Create a calendar event and return its provider event id."""
+    event_id = _provider.create_event(
+        calendar_id, summary, _dt(start_iso), _dt(end_iso), attendees
+    )
+    return {"event_id": event_id}
+
+
+@mcp.tool()
+def cancel_event(calendar_id: str, event_id: str) -> dict:
+    """Delete a calendar event."""
+    ok = _provider.cancel_event(calendar_id, event_id)
+    return {"cancelled": ok}
+
+
+@mcp.tool()
+def update_event(
+    calendar_id: str, event_id: str, start_iso: str, end_iso: str
+) -> dict:
+    """Move an existing calendar event to a new time window."""
+    ok = _provider.update_event(calendar_id, event_id, _dt(start_iso), _dt(end_iso))
+    return {"updated": ok}
+
+
+if __name__ == "__main__":
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
+    mcp.run(transport=transport)
+
+################################################################################
+# FILE: mcp-servers/mcp-email/Dockerfile
+################################################################################
+
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY services/shared /app/services/shared
+COPY mcp-servers/mcp-email /app/mcp-servers/mcp-email
+
+RUN pip install --no-cache-dir /app/services/shared /app/mcp-servers/mcp-email
+
+WORKDIR /app/mcp-servers/mcp-email
+EXPOSE 8083
+
+CMD ["python", "server.py"]
+
+################################################################################
+# FILE: mcp-servers/mcp-email/providers/__init__.py
+################################################################################
+
+"""Email provider abstraction.
+
+`EmailProvider` is the interface the MCP tool calls. Gmail is the default;
+`FakeEmailProvider` captures messages in memory for tests/demos so sent mail
+can be asserted without hitting Gmail.
+"""
+
+from __future__ import annotations
+
+import base64
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from email.mime.text import MIMEText
+
+
+@dataclass
+class CapturedEmail:
+    to: str
+    subject: str
+    body: str
+    cc: list[str] = field(default_factory=list)
+
+
+class EmailProvider(ABC):
+    @abstractmethod
+    def send_email(
+        self, to: str, subject: str, body: str, cc: list[str] | None = None
+    ) -> str:
+        """Send an email; return a provider message id."""
+
+
+class FakeEmailProvider(EmailProvider):
+    """In-memory outbox. Inspect `.outbox` in tests."""
+
+    def __init__(self) -> None:
+        self.outbox: list[CapturedEmail] = []
+
+    def send_email(
+        self, to: str, subject: str, body: str, cc: list[str] | None = None
+    ) -> str:
+        self.outbox.append(CapturedEmail(to=to, subject=subject, body=body, cc=cc or []))
+        return f"fake-msg-{len(self.outbox)}"
+
+
+class GmailProvider(EmailProvider):
+    """Gmail implementation using the Gmail API."""
+
+    def __init__(self, credentials_file: str, token_file: str, sender: str) -> None:
+        self._credentials_file = credentials_file
+        self._token_file = token_file
+        self._sender = sender
+        self._service = None
+
+    def _svc(self):
+        if self._service is None:
+            from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
+
+            creds = Credentials.from_authorized_user_file(
+                self._token_file,
+                scopes=["https://www.googleapis.com/auth/gmail.send"],
+            )
+            self._service = build("gmail", "v1", credentials=creds)
+        return self._service
+
+    def send_email(
+        self, to: str, subject: str, body: str, cc: list[str] | None = None
+    ) -> str:
+        message = MIMEText(body)
+        message["to"] = to
+        message["from"] = self._sender
+        message["subject"] = subject
+        if cc:
+            message["cc"] = ",".join(cc)
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        sent = (
+            self._svc()
+            .users()
+            .messages()
+            .send(userId="me", body={"raw": raw})
+            .execute()
+        )
+        return sent["id"]
+
+
+_SHARED_FAKE: FakeEmailProvider | None = None
+
+
+def get_shared_fake() -> FakeEmailProvider:
+    global _SHARED_FAKE
+    if _SHARED_FAKE is None:
+        _SHARED_FAKE = FakeEmailProvider()
+    return _SHARED_FAKE
+
+
+def build_provider() -> EmailProvider:
+    from apptshared.config import get_settings
+
+    settings = get_settings()
+    if settings.fake_providers:
+        return get_shared_fake()
+    return GmailProvider(
+        settings.google_credentials_file,
+        settings.google_token_file,
+        settings.gmail_sender,
+    )
+
+################################################################################
+# FILE: mcp-servers/mcp-email/pyproject.toml
+################################################################################
+
+[project]
+name = "mcp-email"
+version = "0.1.0"
+description = "Remote MCP server for sending email (Gmail + fake provider)"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2",
+    "apptshared",
+    "google-api-python-client>=2.130",
+    "google-auth>=2.30",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server.py", "providers"]
+
+[tool.uv.sources]
+apptshared = { path = "../../services/shared", editable = true }
+
+################################################################################
+# FILE: mcp-servers/mcp-email/server.py
+################################################################################
+
+"""Remote MCP server: send email.
+
+Tool:
+- send_email(to, subject, body, cc)
+
+Uses the provider abstraction: Gmail by default, in-memory fake when
+FAKE_PROVIDERS=true.
+"""
+
+from __future__ import annotations
+
+import os
+
+from mcp.server.fastmcp import FastMCP
+
+from providers import build_provider
+
+mcp = FastMCP("email", host="0.0.0.0", port=8083)
+_provider = build_provider()
+
+
+@mcp.tool()
+def send_email(
+    to: str, subject: str, body: str, cc: list[str] | None = None
+) -> dict:
+    """Send a plain-text email and return the provider message id."""
+    message_id = _provider.send_email(to, subject, body, cc)
+    return {"message_id": message_id}
+
+
+if __name__ == "__main__":
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
+    mcp.run(transport=transport)
+
+################################################################################
+# FILE: mcp-servers/mcp-resource-details/Dockerfile
+################################################################################
+
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY services/shared /app/services/shared
+COPY mcp-servers/mcp-resource-details /app/mcp-servers/mcp-resource-details
+
+RUN pip install --no-cache-dir /app/services/shared /app/mcp-servers/mcp-resource-details
+
+WORKDIR /app/mcp-servers/mcp-resource-details
+EXPOSE 8081
+
+CMD ["python", "server.py"]
+
+################################################################################
+# FILE: mcp-servers/mcp-resource-details/pyproject.toml
+################################################################################
+
+[project]
+name = "mcp-resource-details"
+version = "0.1.0"
+description = "Remote MCP server exposing resource details and opening hours"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2",
+    "apptshared",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["server.py"]
+
+[tool.uv.sources]
+apptshared = { path = "../../services/shared", editable = true }
+
+################################################################################
+# FILE: mcp-servers/mcp-resource-details/server.py
+################################################################################
+
+"""Remote MCP server: resource details + organisation opening hours.
+
+Tools:
+- list_resources()            -> [{id, name, email, calendar_id, timezone}]
+- get_resource(resource)      -> {id, name, email, calendar_id, timezone}
+- get_opening_hours(resource) -> {timezone, days: {dow: {start, end}}}
+
+Backed by Postgres (via apptshared). Runs over Streamable HTTP so the agent
+orchestrator can reach it as a remote tool.
+"""
+
+from __future__ import annotations
+
+import os
+
+from mcp.server.fastmcp import FastMCP
+from sqlalchemy import select
+
+from apptshared.db import session_scope
+from apptshared.models import OpeningHours, Resource
+
+mcp = FastMCP("resource-details", host="0.0.0.0", port=8081)
+
+
+def _resource_by_name_or_id(session, resource: str) -> Resource | None:
+    row = session.get(Resource, resource)
+    if row:
+        return row
+    return session.execute(
+        select(Resource).where(Resource.name == resource)
+    ).scalar_one_or_none()
+
+
+@mcp.tool()
+def list_resources() -> list[dict]:
+    """List all active bookable resources."""
+    for session in session_scope():
+        rows = session.execute(
+            select(Resource).where(Resource.active.is_(True))
+        ).scalars()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "email": r.email,
+                "calendar_id": r.calendar_id,
+                "timezone": r.timezone,
+            }
+            for r in rows
+        ]
+    return []
+
+
+@mcp.tool()
+def get_resource(resource: str) -> dict:
+    """Get a single resource by id or name. Includes email for notifications."""
+    for session in session_scope():
+        r = _resource_by_name_or_id(session, resource)
+        if not r:
+            return {"error": "not_found", "resource": resource}
+        return {
+            "id": r.id,
+            "name": r.name,
+            "email": r.email,
+            "calendar_id": r.calendar_id,
+            "timezone": r.timezone,
+        }
+    return {"error": "not_found", "resource": resource}
+
+
+@mcp.tool()
+def get_opening_hours(resource: str | None = None) -> dict:
+    """Return opening hours. Resource-specific hours override org hours when set.
+
+    Response: {"timezone": str, "days": {"0": {"start": "09:00", "end": "17:00"}, ...}}
+    """
+    for session in session_scope():
+        tz = "UTC"
+        resource_id = None
+        if resource:
+            r = _resource_by_name_or_id(session, resource)
+            if r:
+                tz = r.timezone
+                resource_id = r.id
+
+        rows = list(
+            session.execute(
+                select(OpeningHours).where(
+                    OpeningHours.scope == "resource",
+                    OpeningHours.resource_id == resource_id,
+                )
+            ).scalars()
+        )
+        if not rows:
+            rows = list(
+                session.execute(
+                    select(OpeningHours).where(OpeningHours.scope == "org")
+                ).scalars()
+            )
+
+        days = {
+            str(row.day_of_week): {
+                "start": row.start_time.strftime("%H:%M"),
+                "end": row.end_time.strftime("%H:%M"),
+            }
+            for row in rows
+        }
+        return {"timezone": tz, "days": days}
+    return {"timezone": "UTC", "days": {}}
+
+
+if __name__ == "__main__":
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
+    mcp.run(transport=transport)
+
+################################################################################
+# FILE: README.md
+################################################################################
+
+# Appointment Scheduling Agent
+
+A calendaring system for booking bookable **resources** (e.g. a doctor â†’
+"doctor appointment"). Patients verify their email, pick a resource and an
+available time within opening hours, and an **agentic orchestrator** validates
+and executes the booking â€” creating Google Calendar events and sending email
+notifications through **remote MCP tools**.
+
+Postgres is the system of record; Google Calendar is a synced projection. The
+whole stack runs **offline** in Docker with `FAKE_PROVIDERS=true` (in-memory
+calendar/email), so you can test validation and orchestration without any Google
+or Azure account.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Patient] -->|GraphQL + form| WF[web-form service]
+    WF -->|available slots| MCPR[(mcp-resource-details)]
+    WF -->|busy slots| MCPC[(mcp-calendar)]
+    WF -->|magic-link email| MCPE[(mcp-email)]
+    WF -->|pending booking| DB[(Postgres)]
+    WF -->|request envelope| Q[[Queue: Service Bus / file]]
+    Q --> AG[agent-orchestrator]
+    AG --> GR{{deterministic guardrail}}
+    GR --> SM{{workflow state machine}}
+    SM --> MCPC
+    SM --> MCPE
+    SM --> MCPR
+    SM --> DB
+    AG -->|append-only| AUD[(workflow_events audit log)]
+```
+
+### Components
+
+| Component | Path | Role |
+|-----------|------|------|
+| web-form | `services/web-form` | Strawberry GraphQL edge + GraphiQL playground, magic-link auth, availability preview, form UI |
+| agent-orchestrator | `services/agent-orchestrator` | Queue consumer, **guardrail**, **state machine**, **audit**, workflow, LLM adapter |
+| mcp-resource-details | `mcp-servers/mcp-resource-details` | Resource details + opening hours (MCP tool) |
+| mcp-calendar | `mcp-servers/mcp-calendar` | Google Calendar CRUD + busy lookup (MCP tool, Google + fake) |
+| mcp-email | `mcp-servers/mcp-email` | Send email (MCP tool, Gmail + fake) |
+| shared | `services/shared` | Contracts, config, DB models/session, MCP client, queue |
+| db | `db` | Alembic migrations + seed |
+| infrastructure | `infrastructure` | Terraform for the AKS stack |
+| deploy/helm | `deploy/helm` | Kubernetes/Helm manifests |
+
+### Design decisions
+
+- **GraphQL only at the edge**; all agent-to-tool traffic is **MCP**.
+- **Postgres is authoritative.** A partial unique index on
+  `(resource_id, start_utc)` for active bookings prevents double-booking and
+  closes the check-then-book race window.
+- **Validation is a deterministic guardrail**, not an LLM â€” reproducible and
+  unit-testable. The **workflow state machine** decides *which* steps are legal
+  and in *what order*; the LLM only composes message text.
+- **Full auditability:** every guardrail decision, transition, and tool call is
+  appended to `workflow_events`. Reconstruct any booking's lifecycle via the
+  GraphQL `bookingTimeline` query or `audit.reconstruct_timeline`.
+- **Timezone-aware** throughout: times stored in UTC, opening hours evaluated in
+  the resource's IANA timezone.
+
+### Request contracts (JSON)
+
+Appointment / cancellation carry a single `slot`; **reschedule carries both**
+`old_slot` and `new_slot`. The agent returns an `AgentResult`
+(`type`, `resource`, `booking_id`, `status`, `slot`, `reason`).
+
+---
+
+## Setup
+
+### Prerequisites
+
+- **Docker + Docker Compose** â€” for the full containerised stack.
+- **Python 3.12** and [`uv`](https://docs.astral.sh/uv/) â€” for local
+  (non-container) runs, tests, and the inject CLI.
+- **Node.js / `npx`** *(optional)* â€” only for the bundled MCP Inspector targets.
+- **`make`** *(optional)* â€” convenience targets. On Windows use Git Bash / WSL,
+  or run the underlying commands directly.
+
+### Configure environment
+
+```bash
+cp .env.example .env      # defaults work out of the box (FAKE_PROVIDERS=true)
+```
+
+The defaults run the whole stack **offline** with in-memory calendar/email
+providers and a file-backed queue â€” no Google or Azure account required. See
+[Switching to real Google + Azure](#switching-to-real-google--azure) to go live.
+
+---
+
+## Running
+
+### Option A â€” Everything in Docker (recommended)
+
+```bash
+docker compose up --build          # foreground; Ctrl-C to stop
+# or, detached:
+make up                            # docker compose up --build -d
+```
+
+This starts Postgres, runs migrations + seed (Dr Lee, Dr Patel; hours
+09:00â€“17:00 Monâ€“Fri), then launches the three MCP servers, the web-form service,
+and the agent-orchestrator.
+
+| Endpoint | URL |
+|----------|-----|
+| Booking form | <http://localhost:8080> |
+| GraphQL Playground (GraphiQL) | <http://localhost:8080/graphql> |
+| mcp-resource-details | <http://localhost:8081/mcp> |
+| mcp-calendar | <http://localhost:8082/mcp> |
+| mcp-email | <http://localhost:8083/mcp> |
+| Postgres | `localhost:5432` (`appt` / `appt`) |
+
+Useful commands:
+
+```bash
+docker compose logs -f agent-orchestrator   # follow one service's logs
+docker compose ps                           # container status
+docker compose down                         # stop the stack
+make down                                   # stop AND wipe volumes (fresh DB)
+```
+
+### Option B â€” Local Python environment (no containers)
+
+Create the virtualenv and install the workspace packages in editable mode:
+
+```bash
+uv venv .venv --python 3.12
+uv pip install --python .venv pytest pytest-asyncio ruff \
+  -e services/shared -e services/agent-orchestrator -e services/web-form
+# or simply:
+make venv && make install
+```
+
+Use this environment for the unit/scenario tests and the inject-a-message CLI
+below. To run the web-form or MCP servers locally you still need a Postgres
+instance (e.g. `docker compose up postgres migrate`) and a populated `.env`.
+
+---
+
+## Testing the agent (validation + orchestration)
+
+The system is designed so orchestration is easy to verify. From fastest to
+fullest:
+
+### 1. Unit + scenario tests (no services needed)
+
+```bash
+cd services/agent-orchestrator
+../../.venv/Scripts/python.exe -m pytest -q
+```
+
+Covers:
+- **Guardrail** (`tests/test_guardrail.py`): unverified patient, out-of-hours,
+  double-booked, unknown resource â†’ exact rejection reasons.
+- **State machine** (`tests/test_state_machine.py`): legal vs illegal transitions.
+- **Orchestration + audit** (`tests/test_orchestration.py`): appointment,
+  cancelâ†’reschedule-offer, reschedule (incl. taken slot / out-of-hours),
+  idempotent duplicate, DB double-book guard, and **timeline reconstruction**.
+- **Scenario/eval suite** (`tests/scenarios/*.json`): declarative
+  input â†’ expected ordered tool-call trace + final status. Add a case by dropping
+  in a JSON file â€” no code required.
+
+### 2. Inject-a-message CLI (fastest end-to-end loop)
+
+Publish a request straight onto the queue and run the agent once, printing the
+**tool-call trace** and **audit timeline**:
+
+```bash
+cd services/agent-orchestrator
+../../.venv/Scripts/python.exe -m scripts.inject appointment \
+  --resource "Dr Lee" --email you@example.com \
+  --start 2026-07-13T09:00:00+10:00 --run
+```
+
+Use `cancellation` / `reschedule` similarly (see `make inject-*`).
+
+### 3. MCP Inspector (bundled)
+
+Manually invoke each MCP server's tools/schemas (servers must be running):
+
+```bash
+make inspect-resources   # npx @modelcontextprotocol/inspector http://localhost:8081/mcp
+make inspect-calendar
+make inspect-email
+```
+
+### 4. GraphQL Playground
+
+Open <http://localhost:8080/graphql> and exercise `resources`,
+`availableSlots`, `startVerification`, `requestAppointment`, and
+`bookingTimeline`.
+
+---
+
+## Deploy (AKS)
+
+1. **Provision infrastructure** (ACR, AKS with workload identity, Postgres,
+   Service Bus, Key Vault, AI Foundry):
+
+   ```bash
+   cd infrastructure
+   terraform init
+   terraform apply -var-file=environments/dev.tfvars
+   ```
+
+2. **CI/CD** â€” GitHub Actions:
+   - `.github/workflows/ci.yml`: lint, tests, Terraform validate, image builds.
+   - `.github/workflows/deploy.yml`: Azure OIDC login â†’ build/push images to ACR
+     â†’ `helm upgrade` to AKS (runs the DB migration Job). Set `fakeProviders=false`
+     and provide real Google/Azure secrets via Key Vault for production.
+
+3. **Secrets** (production) are sourced from Key Vault into the
+   `appointment-secrets` Kubernetes secret (`DATABASE_URL`,
+   `SERVICE_BUS_CONNECTION_STRING`, `MCP_API_KEY`, `AZURE_AI_PROJECT_ENDPOINT`,
+   Google credentials).
+
+---
+
+## Switching to real Google + Azure
+
+Set `FAKE_PROVIDERS=false` and provide:
+- Google OAuth token/credentials (`GOOGLE_CREDENTIALS_FILE`, `GOOGLE_TOKEN_FILE`)
+  with Calendar + Gmail scopes; `GMAIL_SENDER`.
+- `AZURE_AI_PROJECT_ENDPOINT` + `AZURE_AI_AGENT_MODEL` for the Foundry agent that
+  composes patient-facing message text.
+- `SERVICE_BUS_CONNECTION_STRING` to use Azure Service Bus instead of the local
+  file queue.
+
+Providers are pluggable (`CalendarProvider`, `EmailProvider`) â€” Outlook/Exchange
+can be added without touching the agent workflow.
+
+---
+
+## Repository layout
+
+```
+services/{shared,web-form,agent-orchestrator}
+mcp-servers/{mcp-resource-details,mcp-calendar,mcp-email}
+db/                 # Alembic migrations + seed
+infrastructure/     # Terraform (AKS stack)
+deploy/helm/        # Kubernetes manifests
+.github/workflows/  # CI + Deploy
+docker-compose.yml  # local stack
+```
+
+################################################################################
+# FILE: services/agent-orchestrator/app/__init__.py
+################################################################################
+
+
+################################################################################
+# FILE: services/agent-orchestrator/app/agent.py
+################################################################################
+
+"""Agent orchestration ('Agent 2' role).
+
+The LLM agent is at the center: an agent loop asks the planner (app.agent_llm)
+for the next action, executes it, feeds the observation back, and repeats until
+the model finishes. The planner reads the pluggable workflow playbook
+(app.workflow) and decides *what* to do; the firewall (app.firewall) + the
+guardrail admission check enforce *what is allowed* â€” legal state transitions and
+an email recipient allow-list â€” so every action stays safe and auditable.
+
+In FAKE_PROVIDERS mode (tests/local) the planner deterministically replays the
+canonical action sequence, so the workflow is fully reproducible.
+
+Action vocabulary: get_resource, create_event, cancel_event, update_event,
+offer_reschedule, send_email, finish.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from apptshared.schemas import (
+    AgentResult,
+    AppointmentRequest,
+    BookingStatus,
+    RequestEnvelope,
+    WorkflowActor,
+    WorkflowOutcome,
+)
+
+from app import agent_llm, audit, firewall, guardrail, llm, repository, workflow
+from app.state_machine import IllegalTransitionError
+from app.tools import Tools
+
+
+async def process(envelope: RequestEnvelope, tools: Tools | None = None) -> AgentResult:
+    tools = tools or Tools()
+    payload = envelope.payload
+    corr = envelope.correlation_id
+    booking_id = payload.booking_id
+
+    # Idempotency: skip if already in a terminal state for this key.
+    if repository.already_processed(payload.idempotency_key):
+        audit.record(
+            booking_id, corr, "duplicate_skipped", WorkflowActor.system,
+            WorkflowOutcome.ok, reason="idempotent_duplicate",
+        )
+        return _result(payload, repository.get_status(booking_id) or BookingStatus.confirmed)
+
+    # Deterministic guardrail gate.
+    verdict = await guardrail.validate(payload, tools)
+    if not verdict.ok:
+        return await _reject(payload, corr, tools, verdict.reason or "rejected")
+
+    audit.record(
+        booking_id, corr, "guardrail_passed", WorkflowActor.guardrail, WorkflowOutcome.ok
+    )
+
+    # LLM-driven agent loop: the planner decides each next action; the firewall
+    # (guardrail admission above + state-machine transition checks below) keeps
+    # every action safe and auditable.
+    return await _run_agent_loop(payload, corr, tools)
+
+
+_MAX_STEPS = 12
+
+
+@dataclass
+class _LoopState:
+    resource: dict | None = None
+    status: BookingStatus | None = None
+
+
+async def _run_agent_loop(payload, corr: str, tools: Tools) -> AgentResult:
+    """Ask the planner for the next action, execute it behind the firewall, feed
+    the observation back, and repeat until the model finishes. The model decides
+    the workflow; the firewall enforces legal transitions and the recipient
+    allow-list."""
+    workflow_text = workflow.load_workflow(payload.resource)
+    plan = agent_llm.make_planner(workflow_text, payload)
+    state = _LoopState()
+    history: list[dict] = []
+
+    for _ in range(_MAX_STEPS):
+        action = plan.next_action(history)
+        if action.tool == "finish":
+            break
+        try:
+            observation = await _execute(action, payload, corr, tools, state)
+        except IllegalTransitionError as exc:
+            return await _reject(payload, corr, tools, str(exc))
+        history.append({"action": action.tool, "observation": observation})
+
+    final = state.status or repository.get_status(payload.booking_id) or BookingStatus.confirmed
+    return _result(payload, final)
+
+
+async def _execute(action, payload, corr: str, tools: Tools, state: _LoopState) -> dict:
+    tool = action.tool
+    if tool == "get_resource":
+        state.resource = await tools.get_resource(payload.resource)
+        return {"resource": state.resource}
+    if tool == "create_event":
+        return await _exec_create_event(payload, corr, tools, state)
+    if tool == "cancel_event":
+        return await _exec_cancel_event(payload, corr, tools, state)
+    if tool == "update_event":
+        return await _exec_update_event(payload, corr, tools, state)
+    if tool == "offer_reschedule":
+        return _exec_offer_reschedule(payload, corr, state)
+    if tool == "send_email":
+        return await _exec_send_email(action.args, payload, tools, state)
+    raise ValueError(f"Unknown agent action: {tool}")
+
+
+async def _resource(payload, tools: Tools, state: _LoopState) -> dict:
+    if state.resource is None:
+        state.resource = await tools.get_resource(payload.resource)
+    return state.resource
+
+
+async def _exec_create_event(payload, corr: str, tools: Tools, state: _LoopState) -> dict:
+    booking_id = payload.booking_id
+    resource = await _resource(payload, tools, state)
+    frm = firewall.check_transition(booking_id, BookingStatus.confirmed, BookingStatus.pending)
+    created = await tools.create_event(
+        resource["calendar_id"],
+        f"Appointment: {payload.resource}",
+        payload.slot,
+        [payload.patient_email, resource["email"]],
+    )
+    repository.set_event_id(booking_id, created.get("event_id"))
+    repository.set_status(booking_id, BookingStatus.confirmed)
+    state.status = BookingStatus.confirmed
+    audit.record(
+        booking_id, corr, "appointment_confirmed", WorkflowActor.agent,
+        WorkflowOutcome.ok, from_state=frm, to_state=BookingStatus.confirmed,
+        tool_name="create_event", result=created,
+    )
+    return {"event_id": created.get("event_id"), "status": "confirmed"}
+
+
+async def _exec_cancel_event(payload, corr: str, tools: Tools, state: _LoopState) -> dict:
+    booking_id = payload.booking_id
+    resource = await _resource(payload, tools, state)
+    frm = firewall.check_transition(booking_id, BookingStatus.cancelled, BookingStatus.confirmed)
+    event_id = repository.get_calendar_event_id(booking_id)
+    if event_id:
+        await tools.cancel_event(resource["calendar_id"], event_id)
+        repository.set_event_id(booking_id, None)
+    repository.set_status(booking_id, BookingStatus.cancelled)
+    state.status = BookingStatus.cancelled
+    audit.record(
+        booking_id, corr, "appointment_cancelled", WorkflowActor.agent,
+        WorkflowOutcome.ok, from_state=frm, to_state=BookingStatus.cancelled,
+        tool_name="cancel_event",
+    )
+    return {"status": "cancelled"}
+
+
+def _exec_offer_reschedule(payload, corr: str, state: _LoopState) -> dict:
+    booking_id = payload.booking_id
+    frm = firewall.check_transition(
+        booking_id, BookingStatus.reschedule_offered, BookingStatus.cancelled
+    )
+    repository.set_status(booking_id, BookingStatus.reschedule_offered)
+    state.status = BookingStatus.reschedule_offered
+    audit.record(
+        booking_id, corr, "reschedule_offered", WorkflowActor.agent, WorkflowOutcome.ok,
+        from_state=frm, to_state=BookingStatus.reschedule_offered,
+    )
+    return {"status": "reschedule_offered"}
+
+
+async def _exec_update_event(payload, corr: str, tools: Tools, state: _LoopState) -> dict:
+    booking_id = payload.booking_id
+    resource = await _resource(payload, tools, state)
+    frm = firewall.check_transition(booking_id, BookingStatus.rescheduled, BookingStatus.confirmed)
+    event_id = repository.get_calendar_event_id(booking_id)
+    if event_id:
+        await tools.update_event(resource["calendar_id"], event_id, payload.new_slot)
+    else:
+        created = await tools.create_event(
+            resource["calendar_id"],
+            f"Appointment: {payload.resource}",
+            payload.new_slot,
+            [payload.patient_email, resource["email"]],
+        )
+        repository.set_event_id(booking_id, created.get("event_id"))
+    repository.set_slot(booking_id, payload.new_slot)
+    repository.set_status(booking_id, BookingStatus.rescheduled)
+    state.status = BookingStatus.rescheduled
+    audit.record(
+        booking_id, corr, "appointment_rescheduled", WorkflowActor.agent,
+        WorkflowOutcome.ok, from_state=frm, to_state=BookingStatus.rescheduled,
+        tool_name="update_event",
+    )
+    return {"status": "rescheduled"}
+
+
+async def _exec_send_email(args: dict, payload, tools: Tools, state: _LoopState) -> dict:
+    recipient = args.get("recipient", "patient")
+    kind = args.get("kind", "confirmation")
+    to = firewall.resolve_recipient(recipient, payload, state.resource)
+    if not to:
+        return {"skipped": f"no_address_for_{recipient}"}
+    subject, body = _render_email(kind, payload)
+    await tools.send_email(to, subject, body)
+    return {"sent_to": recipient}
+
+
+def _render_email(kind: str, payload) -> tuple[str, str]:
+    if kind == "confirmation":
+        return "Appointment confirmed", llm.confirmation_text(payload.resource, payload.slot)
+    if kind == "resource_notice":
+        return (
+            "New appointment booked",
+            f"New booking with {payload.patient_email} at {payload.slot.start.isoformat()}.",
+        )
+    if kind == "cancellation":
+        return (
+            "Appointment cancelled",
+            "Your appointment has been cancelled. Would you like to reschedule?",
+        )
+    if kind == "reschedule":
+        return "Appointment rescheduled", llm.reschedule_text(payload.resource, payload.new_slot)
+    return "Appointment update", "There is an update to your appointment."
+
+
+async def _reject(payload, corr: str, tools: Tools, reason: str) -> AgentResult:
+    booking_id = payload.booking_id
+    frm = repository.get_status(booking_id)
+    # Release the pending hold on a rejected new appointment.
+    if isinstance(payload, AppointmentRequest) and frm == BookingStatus.pending:
+        repository.set_status(booking_id, BookingStatus.cancelled)
+    audit.record(
+        booking_id, corr, "request_rejected", WorkflowActor.guardrail,
+        WorkflowOutcome.rejected, from_state=frm, reason=reason,
+    )
+    await tools.send_email(
+        payload.patient_email,
+        "We could not complete your request",
+        f"Your request could not be completed: {reason}.",
+    )
+    slot = getattr(payload, "slot", None) or getattr(payload, "new_slot", None)
+    return AgentResult(
+        type=payload.type,
+        resource=payload.resource,
+        booking_id=booking_id,
+        status=repository.get_status(booking_id) or BookingStatus.cancelled,
+        slot=slot,
+        reason=reason,
+    )
+
+
+def _result(payload, status: BookingStatus) -> AgentResult:
+    slot = getattr(payload, "slot", None) or getattr(payload, "new_slot", None)
+    return AgentResult(
+        type=payload.type,
+        resource=payload.resource,
+        booking_id=payload.booking_id,
+        status=status,
+        slot=slot,
+    )
+
+################################################################################
+# FILE: services/agent-orchestrator/app/agent_llm.py
+################################################################################
+
+"""LLM agent planner â€” the decision-maker at the center of the orchestrator.
+
+The planner drives an agent loop (see app.agent). Given the pluggable workflow
+playbook (app.workflow), the booking request, and the observations gathered so
+far, it decides the NEXT action to take from a fixed tool vocabulary. The agent
+executes each action behind the firewall (app.firewall: state-machine + email
+allow-list) plus the deterministic guardrail admission check, so the model
+chooses the workflow while the firewall guarantees safety and auditability.
+
+Action vocabulary (the only things the agent can do):
+  get_resource      - look up the resource's calendar/email
+  create_event      - book the requested slot          (-> confirmed)
+  cancel_event      - cancel the existing booking       (-> cancelled)
+  update_event      - move the booking to a new slot    (-> rescheduled)
+  offer_reschedule  - offer the patient a new time      (-> reschedule_offered)
+  send_email        - notify {patient|resource|guardian} (allow-listed)
+  finish            - end the workflow
+
+In FAKE_PROVIDERS mode (tests/local) or when no Foundry endpoint is configured,
+a deterministic planner replays the canonical sequence for each request type, so
+behaviour is fully reproducible. In production the Foundry model chooses actions
+by reading the playbook; if it errors, the planner falls back to the same
+canonical sequence so a booking never gets stuck.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+
+from apptshared.config import get_settings
+from apptshared.schemas import AppointmentRequest, CancellationRequest
+
+logger = logging.getLogger("agent.planner")
+
+
+@dataclass
+class AgentAction:
+    tool: str
+    args: dict = field(default_factory=dict)
+
+
+def _canonical(payload) -> list[AgentAction]:
+    """The safe, canonical action sequence for each request type."""
+    if isinstance(payload, AppointmentRequest):
+        return [
+            AgentAction("get_resource"),
+            AgentAction("create_event"),
+            AgentAction("send_email", {"recipient": "patient", "kind": "confirmation"}),
+            AgentAction("send_email", {"recipient": "resource", "kind": "resource_notice"}),
+            AgentAction("finish"),
+        ]
+    if isinstance(payload, CancellationRequest):
+        return [
+            AgentAction("get_resource"),
+            AgentAction("cancel_event"),
+            AgentAction("send_email", {"recipient": "patient", "kind": "cancellation"}),
+            AgentAction("offer_reschedule"),
+            AgentAction("finish"),
+        ]
+    # RescheduleRequest
+    return [
+        AgentAction("get_resource"),
+        AgentAction("update_event"),
+        AgentAction("send_email", {"recipient": "patient", "kind": "reschedule"}),
+        AgentAction("finish"),
+    ]
+
+
+class _ScriptedPlanner:
+    """Deterministic planner: replays the canonical action sequence for the
+    request type. Used in fake mode and as the production fallback."""
+
+    def __init__(self, payload) -> None:
+        self._script = _canonical(payload)
+        self._i = 0
+
+    def next_action(self, history: list[dict]) -> AgentAction:
+        if self._i >= len(self._script):
+            return AgentAction("finish")
+        action = self._script[self._i]
+        self._i += 1
+        return action
+
+
+_VALID_TOOLS = {
+    "get_resource",
+    "create_event",
+    "cancel_event",
+    "update_event",
+    "offer_reschedule",
+    "send_email",
+    "finish",
+}
+
+_SYSTEM_PROMPT = (
+    "You are the orchestrator for an appointment system. Decide the NEXT action "
+    "to fulfil the request, following the workflow playbook. Valid tools: "
+    "get_resource, create_event, cancel_event, update_event, offer_reschedule, "
+    "send_email, finish. For send_email, args are recipient "
+    "(patient|resource|guardian) and kind "
+    "(confirmation|resource_notice|cancellation|reschedule). Look up the "
+    "resource before creating/updating/cancelling events. Emit finish when done. "
+    'Respond with ONLY one JSON object: {"tool": "...", "args": {...}}.'
+)
+
+
+def _parse_action(raw: str) -> AgentAction:  # pragma: no cover - live LLM only
+    data = json.loads(raw)
+    tool = data.get("tool")
+    if tool not in _VALID_TOOLS:
+        raise ValueError(f"invalid tool: {tool}")
+    args = data.get("args") or {}
+    if not isinstance(args, dict):
+        raise ValueError("args must be an object")
+    return AgentAction(tool=tool, args=args)
+
+
+class _FoundryPlanner:
+    """LLM-driven planner: the model reads the workflow playbook, the request,
+    and the observations so far, then chooses the next action. Falls back to the
+    scripted canonical sequence on any error."""
+
+    def __init__(self, workflow_text: str, payload) -> None:
+        self._workflow = workflow_text
+        self._payload = payload
+        self._fallback = _ScriptedPlanner(payload)
+
+    def next_action(self, history: list[dict]) -> AgentAction:  # pragma: no cover
+        try:
+            from azure.ai.projects import AIProjectClient
+            from azure.identity import DefaultAzureCredential
+
+            settings = get_settings()
+            client = AIProjectClient(
+                endpoint=settings.azure_ai_project_endpoint,
+                credential=DefaultAzureCredential(),
+            )
+            completion = client.inference.get_chat_completions_client().complete(
+                model=settings.azure_ai_agent_model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": self._prompt(history)},
+                ],
+            )
+            return _parse_action(completion.choices[0].message.content or "")
+        except Exception as exc:  # noqa: BLE001 - never let planning stall a booking
+            logger.warning("planner LLM failed, using canonical step: %s", exc)
+            return self._fallback.next_action(history)
+
+    def _prompt(self, history: list[dict]) -> str:
+        return (
+            f"WORKFLOW PLAYBOOK:\n{self._workflow}\n\n"
+            f"REQUEST:\n{self._payload.model_dump_json()}\n\n"
+            f"OBSERVATIONS SO FAR:\n{json.dumps(history)}\n\n"
+            "Choose the single next action now."
+        )
+
+
+def make_planner(workflow_text: str, payload):
+    """Return the planner driving the agent loop.
+
+    Deterministic scripted planner in fake mode or when no Foundry endpoint is
+    configured; otherwise the LLM-driven Foundry planner.
+    """
+    settings = get_settings()
+    if settings.fake_providers or not settings.azure_ai_project_endpoint:
+        return _ScriptedPlanner(payload)
+    return _FoundryPlanner(workflow_text, payload)
+
+################################################################################
+# FILE: services/agent-orchestrator/app/audit.py
+################################################################################
+
+"""Append-only audit recorder.
+
+Every guardrail decision, state transition, and tool call is written to
+`workflow_events`. `reconstruct_timeline` rebuilds the full ordered lifecycle of
+a booking from these events â€” used by tests and the GraphQL `bookingTimeline`
+query.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlalchemy import func, select
+
+from apptshared.db import session_scope
+from apptshared.models import WorkflowEvent
+from apptshared.schemas import (
+    BookingStatus,
+    WorkflowActor,
+    WorkflowEventRecord,
+    WorkflowOutcome,
+)
+
+
+def _next_seq(session, booking_id: str) -> int:
+    current = session.execute(
+        select(func.max(WorkflowEvent.seq)).where(
+            WorkflowEvent.booking_id == booking_id
+        )
+    ).scalar()
+    return (current or 0) + 1
+
+
+def record(
+    booking_id: str,
+    correlation_id: str,
+    event_type: str,
+    actor: WorkflowActor,
+    outcome: WorkflowOutcome,
+    from_state: Optional[BookingStatus] = None,
+    to_state: Optional[BookingStatus] = None,
+    tool_name: Optional[str] = None,
+    request_payload: Optional[dict] = None,
+    result: Optional[dict] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """Append one immutable audit event."""
+    for session in session_scope():
+        seq = _next_seq(session, booking_id)
+        session.add(
+            WorkflowEvent(
+                booking_id=booking_id,
+                seq=seq,
+                correlation_id=correlation_id,
+                event_type=event_type,
+                from_state=from_state.value if from_state else None,
+                to_state=to_state.value if to_state else None,
+                actor=actor.value,
+                tool_name=tool_name,
+                request_payload=request_payload,
+                result=result,
+                outcome=outcome.value,
+                reason=reason,
+                occurred_at=datetime.now(timezone.utc),
+            )
+        )
+
+
+def reconstruct_timeline(booking_id: str) -> list[WorkflowEventRecord]:
+    """Return the ordered lifecycle of a booking from start to end."""
+    for session in session_scope():
+        rows = session.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.booking_id == booking_id)
+            .order_by(WorkflowEvent.seq)
+        ).scalars()
+        return [
+            WorkflowEventRecord(
+                booking_id=e.booking_id,
+                seq=e.seq,
+                correlation_id=e.correlation_id,
+                event_type=e.event_type,
+                from_state=BookingStatus(e.from_state) if e.from_state else None,
+                to_state=BookingStatus(e.to_state) if e.to_state else None,
+                actor=WorkflowActor(e.actor),
+                tool_name=e.tool_name,
+                request_payload=e.request_payload,
+                result=e.result,
+                outcome=WorkflowOutcome(e.outcome),
+                reason=e.reason,
+                occurred_at=e.occurred_at,
+            )
+            for e in rows
+        ]
+    return []
+
+################################################################################
+# FILE: services/agent-orchestrator/app/consumer.py
+################################################################################
+
+"""Queue consumer entrypoint for the agent orchestrator.
+
+Pulls request envelopes off the queue (Azure Service Bus in prod, file-backed
+queue locally) and runs each through the agent workflow.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from apptshared.config import get_settings
+from apptshared.queue import build_queue
+from apptshared.schemas import RequestEnvelope
+
+from app.agent import process
+
+logging.basicConfig(level=get_settings().log_level)
+logger = logging.getLogger("agent.consumer")
+
+
+def _handle(envelope: RequestEnvelope) -> None:
+    result = asyncio.run(process(envelope))
+    logger.info(
+        "processed booking=%s type=%s status=%s reason=%s",
+        result.booking_id,
+        result.type.value,
+        result.status.value,
+        result.reason,
+    )
+
+
+def main() -> None:
+    logger.info("agent orchestrator consuming from queue...")
+    build_queue().consume_forever(_handle)
+
+
+if __name__ == "__main__":
+    main()
+
+################################################################################
+# FILE: services/agent-orchestrator/app/firewall.py
+################################################################################
+
+"""Policy firewall around every action the agent proposes.
+
+The LLM agent (app.agent + app.agent_llm) decides *what* to do; this module is
+the boundary that decides whether each action is *allowed*:
+
+- `check_transition` enforces the workflow state machine on any status change,
+  raising `IllegalTransitionError` for anything illegal regardless of what the
+  model asked for.
+- `resolve_recipient` maps an allow-listed role to a *trusted* address. Email
+  addresses are never taken from LLM output, so a hallucinated or injected
+  instruction can never exfiltrate mail to an arbitrary recipient.
+
+Combined with the deterministic guardrail admission check in app.agent, this
+keeps the model at the center of decision-making while guaranteeing safety and
+auditability.
+"""
+
+from __future__ import annotations
+
+from apptshared.schemas import BookingStatus
+
+from app import repository
+from app.state_machine import assert_transition
+
+
+def check_transition(
+    booking_id: str, to: BookingStatus, default: BookingStatus
+) -> BookingStatus:
+    """Validate a proposed status change against the state machine.
+
+    Returns the current (from) state so callers can record it in the audit log.
+    Raises IllegalTransitionError if the transition is not permitted.
+    """
+    frm = repository.get_status(booking_id) or default
+    assert_transition(frm, to)
+    return frm
+
+
+def resolve_recipient(role: str, payload, resource: dict | None) -> str | None:
+    """Map an allow-listed recipient role to a trusted email address.
+
+    Guardian contact is not yet stored, so it resolves to None (the step is
+    skipped) until that data source is added.
+    """
+    if role == "patient":
+        return payload.patient_email
+    if role == "resource":
+        return resource.get("email") if resource else None
+    return None
+
+################################################################################
+# FILE: services/agent-orchestrator/app/guardrail.py
+################################################################################
+
+"""Deterministic validation guardrail (the 'Agent 1' role).
+
+Pure, code-level checks that gate every effectful request. No LLM involved, so
+results are reproducible and unit-testable in milliseconds. If any check fails
+the request is rejected with a machine-readable reason and no tools that mutate
+state are called.
+
+Checks:
+1. Patient is verified (proved control of their email).
+2. The target slot is within the resource's opening hours.
+3. The target slot is not already busy on the resource's calendar.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from sqlalchemy import select
+
+from apptshared.db import session_scope
+from apptshared.models import Patient
+from apptshared.schemas import (
+    AppointmentRequest,
+    CancellationRequest,
+    RescheduleRequest,
+    Slot,
+)
+from apptshared.timeutils import parse_hhmm, within_opening_hours
+
+from app.tools import Tools
+
+
+@dataclass
+class GuardrailResult:
+    ok: bool
+    reason: str | None = None
+
+
+def _patient_verified(email: str) -> bool:
+    for session in session_scope():
+        patient = session.execute(
+            select(Patient).where(Patient.email == email)
+        ).scalar_one_or_none()
+        return bool(patient and patient.verified_at is not None)
+    return False
+
+
+def _slot_within_hours(hours: dict, slot: Slot) -> bool:
+    from zoneinfo import ZoneInfo
+
+    tz_name = hours.get("timezone", "UTC")
+    dow = str(slot.start.astimezone(ZoneInfo(tz_name)).weekday())
+    day_hours = hours.get("days", {}).get(dow)
+    if not day_hours:
+        return False
+    return within_opening_hours(
+        slot, parse_hhmm(day_hours["start"]), parse_hhmm(day_hours["end"]), tz_name
+    )
+
+
+async def _slot_is_free(tools: Tools, calendar_id: str, slot: Slot) -> bool:
+    busy_raw = await tools.get_busy_slots(calendar_id, slot.start, slot.end)
+    for b in busy_raw or []:
+        busy = Slot(
+            start=datetime.fromisoformat(b["start"]),
+            end=datetime.fromisoformat(b["end"]),
+        )
+        if slot.overlaps(busy):
+            return False
+    return True
+
+
+async def validate(
+    payload: AppointmentRequest | CancellationRequest | RescheduleRequest,
+    tools: Tools,
+) -> GuardrailResult:
+    # 1. Patient legitimacy
+    if not _patient_verified(payload.patient_email):
+        return GuardrailResult(False, "patient_not_verified")
+
+    resource = await tools.get_resource(payload.resource)
+    if not resource or resource.get("error"):
+        return GuardrailResult(False, "unknown_resource")
+    calendar_id = resource["calendar_id"]
+
+    # Cancellations don't need hours/availability checks.
+    if isinstance(payload, CancellationRequest):
+        return GuardrailResult(True)
+
+    target = payload.slot if isinstance(payload, AppointmentRequest) else payload.new_slot
+    hours = await tools.get_opening_hours(payload.resource)
+
+    # 2. Opening hours
+    if not _slot_within_hours(hours, target):
+        return GuardrailResult(False, "outside_opening_hours")
+
+    # 3. Availability (double-book)
+    if not await _slot_is_free(tools, calendar_id, target):
+        return GuardrailResult(False, "slot_already_booked")
+
+    return GuardrailResult(True)
+
+################################################################################
+# FILE: services/agent-orchestrator/app/llm.py
+################################################################################
+
+"""LLM adapter for composing patient-facing message text.
+
+When FAKE_PROVIDERS=true (tests/local) these return deterministic strings so the
+tool-call trace and audit log stay reproducible. When running against real
+providers this is where an Azure AI Foundry agent/model call would generate a
+friendlier natural-language message. The control flow never depends on the LLM.
+"""
+
+from __future__ import annotations
+
+from apptshared.config import get_settings
+from apptshared.schemas import Slot
+
+
+def _fake() -> bool:
+    return get_settings().fake_providers
+
+
+def confirmation_text(resource: str, slot: Slot) -> str:
+    base = (
+        f"Your appointment with {resource} is confirmed for "
+        f"{slot.start.isoformat()} to {slot.end.isoformat()}."
+    )
+    if _fake():
+        return base
+    return _foundry_compose("confirmation", resource, slot, base)
+
+
+def reschedule_text(resource: str, slot: Slot) -> str:
+    base = (
+        f"Your appointment with {resource} has been rescheduled to "
+        f"{slot.start.isoformat()} to {slot.end.isoformat()}."
+    )
+    if _fake():
+        return base
+    return _foundry_compose("reschedule", resource, slot, base)
+
+
+def _foundry_compose(kind: str, resource: str, slot: Slot, fallback: str) -> str:
+    """Compose message text via Azure AI Foundry. Falls back to the deterministic
+    text if the Foundry SDK/endpoint is unavailable."""
+    settings = get_settings()
+    if not settings.azure_ai_project_endpoint:
+        return fallback
+    try:  # pragma: no cover - exercised only with a live Foundry endpoint
+        from azure.ai.projects import AIProjectClient
+        from azure.identity import DefaultAzureCredential
+
+        client = AIProjectClient(
+            endpoint=settings.azure_ai_project_endpoint,
+            credential=DefaultAzureCredential(),
+        )
+        prompt = (
+            f"Write a short, friendly {kind} message for an appointment with "
+            f"{resource} from {slot.start.isoformat()} to {slot.end.isoformat()}."
+        )
+        completion = client.inference.get_chat_completions_client().complete(
+            model=settings.azure_ai_agent_model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return completion.choices[0].message.content or fallback
+    except Exception:
+        return fallback
+
+################################################################################
+# FILE: services/agent-orchestrator/app/repository.py
+################################################################################
+
+"""Booking persistence helpers used by the agent orchestrator."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+
+from apptshared.db import session_scope
+from apptshared.models import Booking
+from apptshared.schemas import BookingStatus, Slot
+
+
+def get_status(booking_id: str) -> BookingStatus | None:
+    for session in session_scope():
+        b = session.get(Booking, booking_id)
+        return BookingStatus(b.status) if b else None
+    return None
+
+
+def get_calendar_event_id(booking_id: str) -> str | None:
+    for session in session_scope():
+        b = session.get(Booking, booking_id)
+        return b.gcal_event_id if b else None
+    return None
+
+
+def set_status(booking_id: str, status: BookingStatus) -> None:
+    for session in session_scope():
+        b = session.get(Booking, booking_id)
+        if b:
+            b.status = status.value
+            b.updated_at = datetime.now(timezone.utc)
+
+
+def set_event_id(booking_id: str, event_id: str | None) -> None:
+    for session in session_scope():
+        b = session.get(Booking, booking_id)
+        if b:
+            b.gcal_event_id = event_id
+
+
+def set_slot(booking_id: str, slot: Slot) -> None:
+    for session in session_scope():
+        b = session.get(Booking, booking_id)
+        if b:
+            b.start_utc = slot.start
+            b.end_utc = slot.end
+
+
+def already_processed(idempotency_key: str, terminal_only: bool = False) -> bool:
+    """True if a booking with this idempotency key is already in a terminal state
+    (used to make queue processing idempotent)."""
+    for session in session_scope():
+        b = session.execute(
+            select(Booking).where(Booking.idempotency_key == idempotency_key)
+        ).scalar_one_or_none()
+        if not b:
+            return False
+        return b.status in ("confirmed", "cancelled", "rescheduled")
+    return False
+
+################################################################################
+# FILE: services/agent-orchestrator/app/state_machine.py
+################################################################################
+
+"""Workflow state machine.
+
+This is the source of truth for *which* steps are legal and in *what* order.
+The LLM agent decides *how* to satisfy a step (which tools to call); this module
+decides whether a transition is permitted and records every transition to the
+append-only audit log. Illegal transitions are rejected regardless of what the
+model proposes.
+"""
+
+from __future__ import annotations
+
+from apptshared.schemas import BookingStatus
+
+# from_state -> set of allowed to_states
+_ALLOWED: dict[BookingStatus, set[BookingStatus]] = {
+    BookingStatus.pending: {
+        BookingStatus.confirmed,
+        BookingStatus.cancelled,
+        BookingStatus.rescheduled,
+    },
+    BookingStatus.confirmed: {
+        BookingStatus.cancelled,
+        BookingStatus.rescheduled,
+    },
+    BookingStatus.cancelled: {
+        BookingStatus.reschedule_offered,
+    },
+    BookingStatus.reschedule_offered: {
+        BookingStatus.rescheduled,
+        BookingStatus.cancelled,
+    },
+    BookingStatus.rescheduled: {
+        BookingStatus.cancelled,
+        BookingStatus.rescheduled,
+    },
+}
+
+
+class IllegalTransitionError(Exception):
+    def __init__(self, frm: BookingStatus, to: BookingStatus) -> None:
+        super().__init__(f"Illegal transition {frm.value} -> {to.value}")
+        self.frm = frm
+        self.to = to
+
+
+def can_transition(frm: BookingStatus, to: BookingStatus) -> bool:
+    return to in _ALLOWED.get(frm, set())
+
+
+def assert_transition(frm: BookingStatus, to: BookingStatus) -> None:
+    if not can_transition(frm, to):
+        raise IllegalTransitionError(frm, to)
+
+################################################################################
+# FILE: services/agent-orchestrator/app/tools.py
+################################################################################
+
+"""MCP tool wrappers with a captured call trace.
+
+`Tools` wraps the remote MCP servers (resource-details, calendar, email). Every
+invocation is appended to `self.trace` as (tool_name, args, result). Tests assert
+on this ordered trace to verify the agent performed the right next steps â€” the
+key testability enabler for orchestration.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+from apptshared.config import get_settings
+from apptshared.mcpclient import call_tool
+from apptshared.schemas import Slot
+
+
+@dataclass
+class ToolCall:
+    tool: str
+    args: dict
+    result: Any = None
+
+
+@dataclass
+class Tools:
+    trace: list[ToolCall] = field(default_factory=list)
+
+    async def _call(self, url: str, tool: str, args: dict) -> Any:
+        settings = get_settings()
+        result = await call_tool(url, tool, args, settings.mcp_api_key)
+        self.trace.append(ToolCall(tool=tool, args=args, result=result))
+        return result
+
+    @property
+    def tool_names(self) -> list[str]:
+        return [c.tool for c in self.trace]
+
+    # --- resource-details ---
+    async def get_resource(self, resource: str) -> dict:
+        return await self._call(
+            get_settings().mcp_resource_details_url, "get_resource", {"resource": resource}
+        )
+
+    async def get_opening_hours(self, resource: str) -> dict:
+        return await self._call(
+            get_settings().mcp_resource_details_url,
+            "get_opening_hours",
+            {"resource": resource},
+        )
+
+    # --- calendar ---
+    async def get_busy_slots(self, calendar_id: str, start: datetime, end: datetime) -> list[dict]:
+        return await self._call(
+            get_settings().mcp_calendar_url,
+            "get_busy_slots",
+            {
+                "calendar_id": calendar_id,
+                "start_iso": start.isoformat(),
+                "end_iso": end.isoformat(),
+            },
+        )
+
+    async def create_event(
+        self, calendar_id: str, summary: str, slot: Slot, attendees: list[str]
+    ) -> dict:
+        return await self._call(
+            get_settings().mcp_calendar_url,
+            "create_event",
+            {
+                "calendar_id": calendar_id,
+                "summary": summary,
+                "start_iso": slot.start.isoformat(),
+                "end_iso": slot.end.isoformat(),
+                "attendees": attendees,
+            },
+        )
+
+    async def cancel_event(self, calendar_id: str, event_id: str) -> dict:
+        return await self._call(
+            get_settings().mcp_calendar_url,
+            "cancel_event",
+            {"calendar_id": calendar_id, "event_id": event_id},
+        )
+
+    async def update_event(self, calendar_id: str, event_id: str, slot: Slot) -> dict:
+        return await self._call(
+            get_settings().mcp_calendar_url,
+            "update_event",
+            {
+                "calendar_id": calendar_id,
+                "event_id": event_id,
+                "start_iso": slot.start.isoformat(),
+                "end_iso": slot.end.isoformat(),
+            },
+        )
+
+    # --- email ---
+    async def send_email(self, to: str, subject: str, body: str) -> dict:
+        return await self._call(
+            get_settings().mcp_email_url,
+            "send_email",
+            {"to": to, "subject": subject, "body": body},
+        )
+
+################################################################################
+# FILE: services/agent-orchestrator/app/workflow.py
+################################################################################
+
+"""Pluggable workflow playbook.
+
+A *workflow* is a plain-text 'playbook' describing what the agent should do for a
+booking, on top of the mandatory deterministic core (validate -> create event ->
+confirm -> email). It is where policy-specific extra steps live, e.g. "notify a
+minor patient's guardian".
+
+Today the playbook is a single hard-coded default (a 'standard temporary
+workflow'). `load_workflow` is the seam where this becomes dynamic later â€”
+loaded per resource from the DB, a file, or a RAG retrieval step â€” without
+touching the agent or the planner.
+
+Safety: the LLM planner (app.planner) may only turn this text into *additional
+notification* steps drawn from a fixed allow-list. The deterministic guardrail
+and state machine still own every calendar mutation and status transition.
+"""
+
+from __future__ import annotations
+
+DEFAULT_WORKFLOW_TEXT = """\
+# Appointment workflow (standard, pluggable)
+
+You orchestrate one booking request at a time. It has already passed the
+deterministic guardrail (patient verified, slot within opening hours, slot free).
+Choose actions from the tool vocabulary to fulfil it, then finish.
+
+New appointment:
+1. get_resource to load the resource's calendar and email.
+2. create_event to book the requested slot (moves the booking to 'confirmed').
+3. send_email to the patient (kind=confirmation).
+4. send_email to the resource (kind=resource_notice).
+5. finish.
+
+Cancellation:
+1. get_resource.
+2. cancel_event to release the existing booking (moves to 'cancelled').
+3. send_email to the patient (kind=cancellation).
+4. offer_reschedule to invite the patient to pick a new time.
+5. finish.
+
+Reschedule:
+1. get_resource.
+2. update_event to move the booking to the new slot (moves to 'rescheduled').
+3. send_email to the patient (kind=reschedule).
+4. finish.
+
+Policy notes (pluggable):
+- If the appointment is for a minor, also send additional preparation
+  instructions to the patient's guardian.
+
+Never invent calendar operations beyond the tools provided. The state machine
+rejects any illegal transition regardless of what you request.
+"""
+
+
+def load_workflow(resource: str | None = None) -> str:
+    """Return the workflow playbook text for a resource.
+
+    Currently returns the standard hard-coded playbook regardless of resource.
+    This is the extension point for dynamic / pluggable workflows: per-resource
+    config, a database row, a file on disk, or a RAG retrieval step can be
+    resolved here later without changing callers.
+    """
+    return DEFAULT_WORKFLOW_TEXT
+
+################################################################################
+# FILE: services/agent-orchestrator/Dockerfile
+################################################################################
+
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY services/shared /app/services/shared
+COPY services/agent-orchestrator /app/services/agent-orchestrator
+
+RUN pip install --no-cache-dir /app/services/shared /app/services/agent-orchestrator
+
+WORKDIR /app/services/agent-orchestrator
+
+CMD ["python", "-m", "app.consumer"]
+
+################################################################################
+# FILE: services/agent-orchestrator/pyproject.toml
+################################################################################
+
+[project]
+name = "agent-orchestrator"
+version = "0.1.0"
+description = "Agentic orchestrator: deterministic guardrail + workflow state machine + LLM agent"
+requires-python = ">=3.12"
+dependencies = [
+    "apptshared",
+    "azure-servicebus>=7.12",
+]
+
+[project.optional-dependencies]
+foundry = ["azure-ai-projects>=1.0.0b7", "azure-identity>=1.17"]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.uv.sources]
+apptshared = { path = "../shared", editable = true }
+
+################################################################################
+# FILE: services/agent-orchestrator/pytest.ini
+################################################################################
+
+[pytest]
+asyncio_mode = auto
+testpaths = tests
+
+################################################################################
+# FILE: services/agent-orchestrator/scripts/__init__.py
+################################################################################
+
+
+################################################################################
+# FILE: services/agent-orchestrator/scripts/inject.py
+################################################################################
+
+"""Inject-a-message CLI â€” the fastest way to test the agent end-to-end.
+
+Publishes a request envelope straight onto the queue (no form/browser needed),
+then optionally runs the agent once and prints the resulting tool-call trace and
+audit timeline so you can see exactly which next-steps the agent took.
+
+Examples:
+    python -m scripts.inject appointment --resource "Dr Lee" \
+        --email you@example.com --start 2026-07-13T09:00:00+10:00 --run
+    python -m scripts.inject cancellation --booking bk-123 --email you@example.com --run
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import uuid
+from datetime import datetime, timedelta
+
+from apptshared.queue import build_queue
+from apptshared.schemas import (
+    AppointmentRequest,
+    CancellationRequest,
+    RequestEnvelope,
+    RescheduleRequest,
+    Slot,
+)
+
+
+def _slot(start_iso: str, minutes: int) -> Slot:
+    start = datetime.fromisoformat(start_iso)
+    return Slot(start=start, end=start + timedelta(minutes=minutes))
+
+
+def build_envelope(args: argparse.Namespace) -> RequestEnvelope:
+    corr = str(uuid.uuid4())
+    booking_id = args.booking or f"bk-{uuid.uuid4().hex[:10]}"
+    if args.command == "appointment":
+        slot = _slot(args.start, args.minutes)
+        payload = AppointmentRequest(
+            booking_id=booking_id,
+            resource=args.resource,
+            patient_email=args.email,
+            idempotency_key=f"appt-{booking_id}",
+            slot=slot,
+        )
+    elif args.command == "cancellation":
+        slot = _slot(args.start, args.minutes) if args.start else _slot(
+            "2026-07-13T09:00:00+10:00", args.minutes
+        )
+        payload = CancellationRequest(
+            booking_id=booking_id,
+            resource=args.resource,
+            patient_email=args.email,
+            idempotency_key=f"cancel-{booking_id}",
+            slot=slot,
+        )
+    else:  # reschedule
+        payload = RescheduleRequest(
+            booking_id=booking_id,
+            resource=args.resource,
+            patient_email=args.email,
+            idempotency_key=f"resched-{booking_id}",
+            old_slot=_slot(args.start, args.minutes),
+            new_slot=_slot(args.new_start, args.minutes),
+        )
+    return RequestEnvelope(correlation_id=corr, payload=payload)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Inject an appointment request")
+    parser.add_argument(
+        "command", choices=["appointment", "cancellation", "reschedule"]
+    )
+    parser.add_argument("--resource", default="Dr Lee")
+    parser.add_argument("--email", required=True)
+    parser.add_argument("--booking")
+    parser.add_argument("--start")
+    parser.add_argument("--new-start", dest="new_start")
+    parser.add_argument("--minutes", type=int, default=30)
+    parser.add_argument(
+        "--run", action="store_true", help="Run the agent once and print the trace"
+    )
+    args = parser.parse_args()
+
+    envelope = build_envelope(args)
+    build_queue().publish(envelope)
+    print(f"Published {args.command} for booking {envelope.payload.booking_id}")
+
+    if args.run:
+        from app.agent import process
+        from app.audit import reconstruct_timeline
+        from app.tools import Tools
+
+        tools = Tools()
+        result = asyncio.run(process(envelope, tools))
+        print("\nAgent result:")
+        print(result.model_dump_json(indent=2))
+        print("\nTool-call trace:")
+        for call in tools.trace:
+            print(f"  - {call.tool}({', '.join(call.args.keys())})")
+        print("\nAudit timeline:")
+        for ev in reconstruct_timeline(envelope.payload.booking_id):
+            print(
+                f"  {ev.seq}. {ev.event_type} [{ev.actor.value}] "
+                f"{ev.from_state or '-'} -> {ev.to_state or '-'} ({ev.outcome.value})"
+            )
+
+
+if __name__ == "__main__":
+    main()
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/__init__.py
+################################################################################
+
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/conftest.py
+################################################################################
+
+"""Test fixtures for the agent orchestrator.
+
+Runs entirely offline: FAKE_PROVIDERS=true, an in-memory SQLite database, and a
+`FakeTools` double that dispatches MCP tool calls to in-process fake providers
+while preserving the real `Tools.trace` so orchestration can be asserted.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+os.environ["FAKE_PROVIDERS"] = "true"
+os.environ["DATABASE_URL"] = "sqlite://"
+
+import apptshared.db as db  # noqa: E402
+from apptshared.config import get_settings  # noqa: E402
+from apptshared.models import Base, Booking, Patient, Resource  # noqa: E402
+from apptshared.schemas import Slot  # noqa: E402
+
+from app.tools import Tools, ToolCall  # noqa: E402
+
+RESOURCE = {
+    "id": "dr-lee",
+    "name": "Dr Lee",
+    "email": "dr.lee@example.com",
+    "calendar_id": "dr-lee@cal",
+    "timezone": "Australia/Sydney",
+}
+HOURS = {
+    "timezone": "Australia/Sydney",
+    "days": {str(d): {"start": "09:00", "end": "17:00"} for d in range(0, 5)},
+}
+
+
+class FakeTools(Tools):
+    """Routes MCP tool calls to in-memory logic; keeps the real trace."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calendar: dict[str, dict] = {}  # event_id -> {start,end}
+        self.busy: list[Slot] = []
+        self.emails: list[dict] = []
+
+    async def _call(self, url: str, tool: str, args: dict) -> Any:  # type: ignore[override]
+        result = self._dispatch(tool, args)
+        self.trace.append(ToolCall(tool=tool, args=args, result=result))
+        return result
+
+    def _dispatch(self, tool: str, args: dict) -> Any:
+        if tool == "get_resource":
+            return RESOURCE
+        if tool == "get_opening_hours":
+            return HOURS
+        if tool == "get_busy_slots":
+            start = datetime.fromisoformat(args["start_iso"])
+            end = datetime.fromisoformat(args["end_iso"])
+            out = []
+            for ev in self.calendar.values():
+                if ev["start"] < end and start < ev["end"]:
+                    out.append(
+                        {"start": ev["start"].isoformat(), "end": ev["end"].isoformat()}
+                    )
+            for b in self.busy:
+                if b.start < end and start < b.end:
+                    out.append({"start": b.start.isoformat(), "end": b.end.isoformat()})
+            return out
+        if tool == "create_event":
+            eid = f"evt-{uuid.uuid4().hex[:8]}"
+            self.calendar[eid] = {
+                "start": datetime.fromisoformat(args["start_iso"]),
+                "end": datetime.fromisoformat(args["end_iso"]),
+            }
+            return {"event_id": eid}
+        if tool == "cancel_event":
+            return {"cancelled": self.calendar.pop(args["event_id"], None) is not None}
+        if tool == "update_event":
+            ev = self.calendar.get(args["event_id"])
+            if ev:
+                ev["start"] = datetime.fromisoformat(args["start_iso"])
+                ev["end"] = datetime.fromisoformat(args["end_iso"])
+            return {"updated": ev is not None}
+        if tool == "send_email":
+            self.emails.append(args)
+            return {"message_id": f"msg-{len(self.emails)}"}
+        raise ValueError(f"unknown tool {tool}")
+
+
+@pytest.fixture(autouse=True)
+def fresh_db():
+    get_settings.cache_clear()
+    # A single shared in-memory connection so every session sees the same DB.
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    db._engine = engine
+    db._SessionFactory = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(engine)
+    yield
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+    db._engine = None
+    db._SessionFactory = None
+
+
+@pytest.fixture
+def seed_resource():
+    for session in db.session_scope():
+        session.add(
+            Resource(
+                id=RESOURCE["id"],
+                name=RESOURCE["name"],
+                email=RESOURCE["email"],
+                calendar_id=RESOURCE["calendar_id"],
+                timezone=RESOURCE["timezone"],
+                active=True,
+            )
+        )
+    return RESOURCE
+
+
+@pytest.fixture
+def verified_patient():
+    email = "patient@example.com"
+    for session in db.session_scope():
+        session.add(
+            Patient(
+                id=str(uuid.uuid4()),
+                email=email,
+                verified_at=datetime.now(timezone.utc),
+            )
+        )
+    return email
+
+
+@pytest.fixture
+def unverified_patient():
+    email = "anon@example.com"
+    for session in db.session_scope():
+        session.add(Patient(id=str(uuid.uuid4()), email=email))
+    return email
+
+
+@pytest.fixture
+def make_booking(seed_resource, verified_patient):
+    """Factory to create a pending booking row for a given slot."""
+
+    def _make(slot: Slot, status: str = "pending", event_id: str | None = None) -> str:
+        booking_id = f"bk-{uuid.uuid4().hex[:8]}"
+        pid = None
+        for session in db.session_scope():
+            pid = session.query(Patient).filter_by(email=verified_patient).first().id
+            session.add(
+                Booking(
+                    id=booking_id,
+                    patient_id=pid,
+                    resource_id=seed_resource["id"],
+                    start_utc=slot.start,
+                    end_utc=slot.end,
+                    status=status,
+                    gcal_event_id=event_id,
+                    idempotency_key=f"key-{booking_id}",
+                )
+            )
+        return booking_id
+
+    return _make
+
+
+def monday_slot(hour: int = 9, minute: int = 0, minutes: int = 30) -> Slot:
+    """A slot on Mon 2026-07-13 in Sydney time, returned in UTC."""
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Australia/Sydney")
+    start = datetime(2026, 7, 13, hour, minute, tzinfo=tz)
+    return Slot(
+        start=start.astimezone(timezone.utc),
+        end=(start + timedelta(minutes=minutes)).astimezone(timezone.utc),
+    )
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/scenarios/appointment_happy_path.json
+################################################################################
+
+{
+  "name": "appointment_happy_path",
+  "setup": { "booking_status": "pending", "event_id": null, "calendar": [], "busy": [] },
+  "request": { "type": "appointment", "resource": "Dr Lee", "hour": 10 },
+  "expected": {
+    "status": "confirmed",
+    "reason": null,
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "get_resource", "create_event", "send_email", "send_email"]
+  }
+}
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/scenarios/cancellation_then_reschedule_offer.json
+################################################################################
+
+{
+  "name": "cancellation_then_reschedule_offer",
+  "setup": { "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 11 }], "busy": [] },
+  "request": { "type": "cancellation", "resource": "Dr Lee", "hour": 11 },
+  "expected": {
+    "status": "reschedule_offered",
+    "reason": null,
+    "tools": ["get_resource", "get_resource", "cancel_event", "send_email"]
+  }
+}
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/scenarios/reschedule_to_taken_slot_rejected.json
+################################################################################
+
+{
+  "name": "reschedule_to_taken_slot_rejected",
+  "setup": { "booking_status": "confirmed", "event_id": "evt-1", "calendar": [{ "event_id": "evt-1", "hour": 12 }], "busy": [15] },
+  "request": { "type": "reschedule", "resource": "Dr Lee", "hour": 12, "new_hour": 15 },
+  "expected": {
+    "status": "confirmed",
+    "reason": "slot_already_booked",
+    "tools": ["get_resource", "get_opening_hours", "get_busy_slots", "send_email"]
+  }
+}
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/test_guardrail.py
+################################################################################
+
+"""Guardrail unit tests â€” deterministic validation, no LLM, millisecond-fast."""
+
+from __future__ import annotations
+
+import uuid
+
+from apptshared.schemas import AppointmentRequest
+
+from app import guardrail
+from tests.conftest import FakeTools, monday_slot
+
+
+def _appointment(email: str, slot) -> AppointmentRequest:
+    return AppointmentRequest(
+        booking_id=f"bk-{uuid.uuid4().hex[:8]}",
+        resource="Dr Lee",
+        patient_email=email,
+        idempotency_key=f"appt-{uuid.uuid4().hex[:8]}",
+        slot=slot,
+    )
+
+
+async def test_unverified_patient_rejected(seed_resource, unverified_patient):
+    tools = FakeTools()
+    result = await guardrail.validate(_appointment(unverified_patient, monday_slot()), tools)
+    assert not result.ok
+    assert result.reason == "patient_not_verified"
+
+
+async def test_within_hours_and_free_passes(seed_resource, verified_patient):
+    tools = FakeTools()
+    result = await guardrail.validate(_appointment(verified_patient, monday_slot(10)), tools)
+    assert result.ok
+
+
+async def test_outside_opening_hours_rejected(seed_resource, verified_patient):
+    tools = FakeTools()
+    # 18:00 Sydney is past the 17:00 close.
+    result = await guardrail.validate(_appointment(verified_patient, monday_slot(18)), tools)
+    assert not result.ok
+    assert result.reason == "outside_opening_hours"
+
+
+async def test_double_booked_rejected(seed_resource, verified_patient):
+    tools = FakeTools()
+    slot = monday_slot(9)
+    tools.busy = [slot]  # calendar already busy at that slot
+    result = await guardrail.validate(_appointment(verified_patient, slot), tools)
+    assert not result.ok
+    assert result.reason == "slot_already_booked"
+
+
+async def test_unknown_resource_rejected(seed_resource, verified_patient):
+    tools = FakeTools()
+
+    async def _no_resource(resource: str):
+        return {"error": "not_found"}
+
+    tools.get_resource = _no_resource  # type: ignore[assignment]
+    result = await guardrail.validate(_appointment(verified_patient, monday_slot(10)), tools)
+    assert not result.ok
+    assert result.reason == "unknown_resource"
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/test_orchestration.py
+################################################################################
+
+"""Orchestration + audit tests: verify the agent performs the correct next-steps
+and that the full lifecycle can be reconstructed from the audit log."""
+
+from __future__ import annotations
+
+import uuid
+
+import pytest
+
+from apptshared.schemas import (
+    AppointmentRequest,
+    BookingStatus,
+    CancellationRequest,
+    RequestEnvelope,
+    RescheduleRequest,
+)
+
+from app import repository
+from app.agent import process
+from app.audit import reconstruct_timeline
+from tests.conftest import FakeTools, monday_slot
+
+
+def _env(payload) -> RequestEnvelope:
+    return RequestEnvelope(correlation_id=str(uuid.uuid4()), payload=payload)
+
+
+async def test_appointment_happy_path(make_booking):
+    slot = monday_slot(10)
+    booking_id = make_booking(slot)
+    tools = FakeTools()
+
+    payload = AppointmentRequest(
+        booking_id=booking_id,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"key-{booking_id}",
+        slot=slot,
+    )
+    result = await process(_env(payload), tools)
+
+    assert result.status == BookingStatus.confirmed
+    assert tools.tool_names == [
+        "get_resource",
+        "get_opening_hours",
+        "get_busy_slots",
+        "get_resource",
+        "create_event",
+        "send_email",  # patient confirmation
+        "send_email",  # resource notification
+    ]
+    assert repository.get_status(booking_id) == BookingStatus.confirmed
+    # Audit timeline reconstructable start-to-end.
+    timeline = reconstruct_timeline(booking_id)
+    events = [e.event_type for e in timeline]
+    assert events == ["guardrail_passed", "appointment_confirmed"]
+
+
+async def test_cancellation_offers_reschedule(make_booking):
+    slot = monday_slot(11)
+    booking_id = make_booking(slot, status="confirmed", event_id="evt-existing")
+    # Seed the fake calendar so cancel_event finds the event.
+    tools = FakeTools()
+    tools.calendar["evt-existing"] = {"start": slot.start, "end": slot.end}
+
+    payload = CancellationRequest(
+        booking_id=booking_id,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"cancel-{booking_id}",
+        slot=slot,
+    )
+    result = await process(_env(payload), tools)
+
+    assert result.status == BookingStatus.reschedule_offered
+    assert "cancel_event" in tools.tool_names
+    timeline = [e.event_type for e in reconstruct_timeline(booking_id)]
+    assert timeline == [
+        "guardrail_passed",
+        "appointment_cancelled",
+        "reschedule_offered",
+    ]
+
+
+async def test_reschedule_moves_event(make_booking):
+    slot = monday_slot(12)
+    booking_id = make_booking(slot, status="confirmed", event_id="evt-1")
+    tools = FakeTools()
+    tools.calendar["evt-1"] = {"start": slot.start, "end": slot.end}
+
+    new_slot = monday_slot(14)
+    payload = RescheduleRequest(
+        booking_id=booking_id,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"resched-{booking_id}",
+        old_slot=slot,
+        new_slot=new_slot,
+    )
+    result = await process(_env(payload), tools)
+
+    assert result.status == BookingStatus.rescheduled
+    assert "update_event" in tools.tool_names
+    assert tools.calendar["evt-1"]["start"] == new_slot.start
+
+
+async def test_reschedule_to_taken_slot_rejected(make_booking):
+    slot = monday_slot(12)
+    booking_id = make_booking(slot, status="confirmed", event_id="evt-1")
+    tools = FakeTools()
+    tools.calendar["evt-1"] = {"start": slot.start, "end": slot.end}
+    taken = monday_slot(15)
+    tools.busy = [taken]
+
+    payload = RescheduleRequest(
+        booking_id=booking_id,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"resched-{booking_id}",
+        old_slot=slot,
+        new_slot=taken,
+    )
+    result = await process(_env(payload), tools)
+
+    assert result.reason == "slot_already_booked"
+    assert "update_event" not in tools.tool_names
+
+
+async def test_reschedule_outside_hours_rejected(make_booking):
+    slot = monday_slot(12)
+    booking_id = make_booking(slot, status="confirmed", event_id="evt-1")
+    tools = FakeTools()
+    tools.calendar["evt-1"] = {"start": slot.start, "end": slot.end}
+
+    payload = RescheduleRequest(
+        booking_id=booking_id,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"resched-{booking_id}",
+        old_slot=slot,
+        new_slot=monday_slot(18),  # past closing time
+    )
+    result = await process(_env(payload), tools)
+    assert result.reason == "outside_opening_hours"
+
+
+async def test_idempotent_duplicate_skipped(make_booking):
+    slot = monday_slot(10)
+    booking_id = make_booking(slot, status="confirmed", event_id="evt-1")
+    tools = FakeTools()
+
+    payload = AppointmentRequest(
+        booking_id=booking_id,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"key-{booking_id}",
+        slot=slot,
+    )
+    # Booking is already terminal (confirmed) -> processing is a no-op.
+    result = await process(_env(payload), tools)
+    assert result.status == BookingStatus.confirmed
+    assert tools.tool_names == []  # no side effects
+
+
+async def test_double_book_second_request_rejected(make_booking):
+    """The DB unique index is the authoritative guard: a second *active* booking
+    for the same resource/slot cannot even be created (closes the race window)."""
+    from sqlalchemy.exc import IntegrityError
+
+    slot = monday_slot(9)
+    first = make_booking(slot, status="confirmed")
+    tools = FakeTools()
+
+    p1 = AppointmentRequest(
+        booking_id=first,
+        resource="Dr Lee",
+        patient_email="patient@example.com",
+        idempotency_key=f"key-{first}",
+        slot=slot,
+    )
+    r1 = await process(_env(p1), tools)
+    assert r1.status == BookingStatus.confirmed
+
+    # Attempting a second active booking at the same slot is blocked by the DB.
+    with pytest.raises(IntegrityError):
+        make_booking(slot, status="pending")
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/test_scenarios.py
+################################################################################
+
+"""JSON-driven scenario / eval suite.
+
+Each fixture in tests/scenarios/*.json declares a setup, a request, and the
+expected final status + ordered tool-call trace. This is the low-effort way to
+add new orchestration cases: drop in a JSON file, no code required.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+
+import pytest
+
+from apptshared.schemas import (
+    AppointmentRequest,
+    CancellationRequest,
+    RequestEnvelope,
+    RescheduleRequest,
+)
+
+from app.agent import process
+from tests.conftest import FakeTools, monday_slot
+
+SCENARIO_DIR = Path(__file__).parent / "scenarios"
+SCENARIOS = sorted(SCENARIO_DIR.glob("*.json"))
+
+
+def _ids(paths):
+    return [p.stem for p in paths]
+
+
+@pytest.mark.parametrize("path", SCENARIOS, ids=_ids(SCENARIOS))
+async def test_scenario(path, make_booking):
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    setup = spec["setup"]
+    req = spec["request"]
+    expected = spec["expected"]
+
+    slot = monday_slot(req["hour"])
+    booking_id = make_booking(
+        slot, status=setup["booking_status"], event_id=setup.get("event_id")
+    )
+
+    tools = FakeTools()
+    for ev in setup.get("calendar", []):
+        s = monday_slot(ev["hour"])
+        tools.calendar[ev["event_id"]] = {"start": s.start, "end": s.end}
+    tools.busy = [monday_slot(h) for h in setup.get("busy", [])]
+
+    common = dict(
+        booking_id=booking_id,
+        resource=req["resource"],
+        patient_email="patient@example.com",
+        idempotency_key=f"key-{uuid.uuid4().hex[:8]}",
+    )
+    if req["type"] == "appointment":
+        payload = AppointmentRequest(slot=slot, **common)
+    elif req["type"] == "cancellation":
+        payload = CancellationRequest(slot=slot, **common)
+    else:
+        payload = RescheduleRequest(
+            old_slot=slot, new_slot=monday_slot(req["new_hour"]), **common
+        )
+
+    result = await process(
+        RequestEnvelope(correlation_id=str(uuid.uuid4()), payload=payload), tools
+    )
+
+    assert result.status.value == expected["status"], f"{path.name} status"
+    assert result.reason == expected["reason"], f"{path.name} reason"
+    if "tools" in expected:
+        assert tools.tool_names == expected["tools"], f"{path.name} tool trace"
+
+################################################################################
+# FILE: services/agent-orchestrator/tests/test_state_machine.py
+################################################################################
+
+"""State machine unit tests â€” legal vs illegal transitions."""
+
+from __future__ import annotations
+
+import pytest
+
+from apptshared.schemas import BookingStatus as S
+
+from app.state_machine import (
+    IllegalTransitionError,
+    assert_transition,
+    can_transition,
+)
+
+
+@pytest.mark.parametrize(
+    "frm,to",
+    [
+        (S.pending, S.confirmed),
+        (S.pending, S.cancelled),
+        (S.confirmed, S.cancelled),
+        (S.confirmed, S.rescheduled),
+        (S.cancelled, S.reschedule_offered),
+        (S.reschedule_offered, S.rescheduled),
+    ],
+)
+def test_legal_transitions(frm, to):
+    assert can_transition(frm, to)
+    assert_transition(frm, to)  # does not raise
+
+
+@pytest.mark.parametrize(
+    "frm,to",
+    [
+        (S.cancelled, S.confirmed),
+        (S.confirmed, S.pending),
+        (S.pending, S.reschedule_offered),
+        (S.reschedule_offered, S.confirmed),
+    ],
+)
+def test_illegal_transitions(frm, to):
+    assert not can_transition(frm, to)
+    with pytest.raises(IllegalTransitionError):
+        assert_transition(frm, to)
+
+################################################################################
+# FILE: services/shared/apptshared/__init__.py
+################################################################################
+
+"""Shared contracts, config, and helpers for the appointment scheduling system."""
+
+from apptshared.schemas import (
+    AgentResult,
+    AppointmentRequest,
+    BookingStatus,
+    CancellationRequest,
+    RequestEnvelope,
+    RequestType,
+    RescheduleRequest,
+    Slot,
+    WorkflowActor,
+    WorkflowEventRecord,
+    WorkflowOutcome,
+)
+
+__all__ = [
+    "AgentResult",
+    "AppointmentRequest",
+    "BookingStatus",
+    "CancellationRequest",
+    "RequestEnvelope",
+    "RequestType",
+    "RescheduleRequest",
+    "Slot",
+    "WorkflowActor",
+    "WorkflowEventRecord",
+    "WorkflowOutcome",
+]
+
+################################################################################
+# FILE: services/shared/apptshared/config.py
+################################################################################
+
+"""Centralised configuration loaded from environment variables / .env."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    environment: str = "local"
+    log_level: str = "INFO"
+
+    # When true, calendar/email use in-memory fakes and the agent uses a local
+    # deterministic model adapter. No external (Google/Azure) calls are made.
+    fake_providers: bool = True
+
+    # Database
+    database_url: str = "postgresql+psycopg://appt:appt@localhost:5432/appointments"
+
+    # Scheduling defaults
+    default_opening_start: str = "09:00"
+    default_opening_end: str = "17:00"
+    slot_minutes: int = 30
+    default_timezone: str = "UTC"
+
+    # Queue
+    service_bus_connection_string: str = ""
+    service_bus_queue_name: str = "appointment-requests"
+
+    # Remote MCP servers
+    mcp_resource_details_url: str = "http://localhost:8081/mcp"
+    mcp_calendar_url: str = "http://localhost:8082/mcp"
+    mcp_email_url: str = "http://localhost:8083/mcp"
+    mcp_api_key: str = "local-dev-key"
+
+    # Magic-link auth
+    magic_link_secret: str = "change-me-in-prod"
+    magic_link_ttl_minutes: int = 15
+    public_base_url: str = "http://localhost:8080"
+
+    # Google
+    google_credentials_file: str = "credentials.json"
+    google_token_file: str = "token.json"
+    gmail_sender: str = "appointments@example.com"
+
+    # Azure AI Foundry
+    azure_ai_project_endpoint: str = ""
+    azure_ai_agent_model: str = "gpt-4o-mini"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+################################################################################
+# FILE: services/shared/apptshared/db.py
+################################################################################
+
+"""Database engine/session factory shared across services."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from apptshared.config import get_settings
+
+_engine = None
+_SessionFactory: sessionmaker[Session] | None = None
+
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        _engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    return _engine
+
+
+def get_session_factory() -> sessionmaker[Session]:
+    global _SessionFactory
+    if _SessionFactory is None:
+        _SessionFactory = sessionmaker(bind=get_engine(), expire_on_commit=False)
+    return _SessionFactory
+
+
+def session_scope() -> Iterator[Session]:
+    """Context-manager style transactional session."""
+    factory = get_session_factory()
+    session = factory()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+################################################################################
+# FILE: services/shared/apptshared/mcpclient.py
+################################################################################
+
+"""Thin async helper to call remote MCP tools over Streamable HTTP.
+
+Both the web-form edge service and the agent orchestrator use this to invoke
+the resource-details, calendar, and email MCP servers. Tool results are parsed
+from the MCP structured/text content back into Python objects.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+
+async def call_tool(url: str, tool: str, arguments: dict[str, Any], api_key: str | None = None) -> Any:
+    """Open a session to a remote MCP server, invoke `tool`, return its result."""
+    headers = {"x-api-key": api_key} if api_key else None
+    async with streamablehttp_client(url, headers=headers) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool, arguments)
+            return _parse_result(result)
+
+
+def _parse_result(result: Any) -> Any:
+    """Prefer structured content; fall back to parsing the first text block."""
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        # FastMCP wraps scalar/list returns under a "result" key.
+        if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
+            return structured["result"]
+        return structured
+
+    content = getattr(result, "content", None) or []
+    for block in content:
+        text = getattr(block, "text", None)
+        if text is not None:
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                return text
+    return None
+
+################################################################################
+# FILE: services/shared/apptshared/models.py
+################################################################################
+
+"""SQLAlchemy ORM models. Postgres is the system of record.
+
+`workflow_events` is an append-only audit log: the full lifecycle of any
+booking can be reconstructed by ordering its events on `seq`.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, time, timezone
+from typing import Optional
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Time,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Resource(Base):
+    __tablename__ = "resources"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    calendar_id: Mapped[str] = mapped_column(String, nullable=False)
+    timezone: Mapped[str] = mapped_column(String, nullable=False, default="UTC")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class OpeningHours(Base):
+    __tablename__ = "opening_hours"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String, nullable=False)  # 'org' | 'resource'
+    resource_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("resources.id"), nullable=True
+    )
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)  # 0=Mon..6=Sun
+    start_time: Mapped[time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+
+
+class Patient(Base):
+    __tablename__ = "patients"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class MagicLinkToken(Base):
+    __tablename__ = "magic_link_tokens"
+
+    token: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class Booking(Base):
+    __tablename__ = "bookings"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    patient_id: Mapped[str] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    resource_id: Mapped[str] = mapped_column(ForeignKey("resources.id"), nullable=False)
+    start_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    gcal_event_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    events: Mapped[list["WorkflowEvent"]] = relationship(
+        back_populates="booking", order_by="WorkflowEvent.seq"
+    )
+
+    __table_args__ = (
+        # Prevent double-booking of an active slot for the same resource.
+        Index(
+            "uq_active_booking_slot",
+            "resource_id",
+            "start_utc",
+            unique=True,
+            postgresql_where=text("status IN ('pending','confirmed')"),
+        ),
+    )
+
+
+class WorkflowEvent(Base):
+    """Append-only audit log entry."""
+
+    __tablename__ = "workflow_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    booking_id: Mapped[str] = mapped_column(ForeignKey("bookings.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String, nullable=False)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    from_state: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    to_state: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    actor: Mapped[str] = mapped_column(String, nullable=False)
+    tool_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    request_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    booking: Mapped["Booking"] = relationship(back_populates="events")
+
+    __table_args__ = (
+        UniqueConstraint("booking_id", "seq", name="uq_booking_event_seq"),
+    )
+
+################################################################################
+# FILE: services/shared/apptshared/queue.py
+################################################################################
+
+"""Message queue abstraction between the web-form service (publisher) and the
+agent orchestrator (consumer).
+
+Two backends:
+- Azure Service Bus (production) when a connection string is configured.
+- A local file-based queue (a directory of JSON messages) for local dev, tests,
+  and the inject-a-message CLI. It works across processes via a shared volume.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+import uuid
+from pathlib import Path
+from typing import Callable
+
+from apptshared.config import get_settings
+from apptshared.schemas import RequestEnvelope
+
+_LOCAL_QUEUE_DIR = Path(os.getenv("LOCAL_QUEUE_DIR", ".localqueue"))
+
+
+class QueueBackend:
+    def publish(self, envelope: RequestEnvelope) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def consume_forever(self, handler: Callable[[RequestEnvelope], None]) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+
+class FileQueue(QueueBackend):
+    """Directory-backed queue. Messages are JSON files; processed files are
+    moved to a `done/` subfolder so the audit trail is preserved."""
+
+    def __init__(self, directory: Path = _LOCAL_QUEUE_DIR) -> None:
+        self.dir = directory
+        self.done = directory / "done"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.done.mkdir(parents=True, exist_ok=True)
+
+    def publish(self, envelope: RequestEnvelope) -> None:
+        name = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.json"
+        path = self.dir / name
+        path.write_text(envelope.model_dump_json(), encoding="utf-8")
+
+    def _pending(self) -> list[Path]:
+        return sorted(p for p in self.dir.glob("*.json") if p.is_file())
+
+    def consume_once(self, handler: Callable[[RequestEnvelope], None]) -> int:
+        processed = 0
+        for path in self._pending():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            envelope = RequestEnvelope.model_validate(data)
+            handler(envelope)
+            path.rename(self.done / path.name)
+            processed += 1
+        return processed
+
+    def consume_forever(self, handler: Callable[[RequestEnvelope], None]) -> None:
+        while True:
+            if self.consume_once(handler) == 0:
+                time.sleep(1.0)
+
+
+class ServiceBusQueue(QueueBackend):
+    """Azure Service Bus backend."""
+
+    def __init__(self, connection_string: str, queue_name: str) -> None:
+        self._conn = connection_string
+        self._queue = queue_name
+
+    def publish(self, envelope: RequestEnvelope) -> None:
+        from azure.servicebus import ServiceBusClient, ServiceBusMessage
+
+        with ServiceBusClient.from_connection_string(self._conn) as client:
+            sender = client.get_queue_sender(self._queue)
+            with sender:
+                sender.send_messages(ServiceBusMessage(envelope.model_dump_json()))
+
+    def consume_forever(self, handler: Callable[[RequestEnvelope], None]) -> None:
+        from azure.servicebus import ServiceBusClient
+
+        with ServiceBusClient.from_connection_string(self._conn) as client:
+            receiver = client.get_queue_receiver(self._queue)
+            with receiver:
+                for msg in receiver:
+                    envelope = RequestEnvelope.model_validate_json(str(msg))
+                    handler(envelope)
+                    receiver.complete_message(msg)
+
+
+def build_queue() -> QueueBackend:
+    settings = get_settings()
+    if settings.service_bus_connection_string and not settings.fake_providers:
+        return ServiceBusQueue(
+            settings.service_bus_connection_string, settings.service_bus_queue_name
+        )
+    return FileQueue()
+
+################################################################################
+# FILE: services/shared/apptshared/schemas.py
+################################################################################
+
+"""Pydantic contracts shared across the web-form service, the agent
+orchestrator, and the MCP tools.
+
+These types are the single source of truth for:
+- the queue message envelope published by the web-form service,
+- the per-type request payloads (appointment / cancellation / reschedule),
+- the JSON result the agent returns,
+- the append-only workflow audit event.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class RequestType(str, Enum):
+    appointment = "appointment"
+    cancellation = "cancellation"
+    reschedule = "reschedule"
+
+
+class BookingStatus(str, Enum):
+    pending = "pending"
+    confirmed = "confirmed"
+    cancelled = "cancelled"
+    reschedule_offered = "reschedule_offered"
+    rescheduled = "rescheduled"
+
+
+class WorkflowActor(str, Enum):
+    guardrail = "guardrail"
+    agent = "agent"
+    tool = "tool"
+    system = "system"
+
+
+class WorkflowOutcome(str, Enum):
+    ok = "ok"
+    rejected = "rejected"
+    error = "error"
+
+
+class Slot(BaseModel):
+    """A timezone-aware time window. Times are stored/compared in UTC."""
+
+    model_config = ConfigDict(frozen=True)
+
+    start: datetime
+    end: datetime
+
+    def overlaps(self, other: "Slot") -> bool:
+        return self.start < other.end and other.start < self.end
+
+
+class _BaseRequest(BaseModel):
+    """Fields common to every request type."""
+
+    booking_id: str = Field(..., description="System-of-record booking id (from DB)")
+    resource: str = Field(..., description="Resource name, e.g. 'Dr Lee'")
+    patient_email: str
+    idempotency_key: str
+
+
+class AppointmentRequest(_BaseRequest):
+    type: Literal[RequestType.appointment] = RequestType.appointment
+    slot: Slot
+
+
+class CancellationRequest(_BaseRequest):
+    type: Literal[RequestType.cancellation] = RequestType.cancellation
+    slot: Slot
+
+
+class RescheduleRequest(_BaseRequest):
+    type: Literal[RequestType.reschedule] = RequestType.reschedule
+    old_slot: Slot
+    new_slot: Slot
+
+
+class RequestEnvelope(BaseModel):
+    """Discriminated union delivered on the queue to the agent orchestrator."""
+
+    model_config = ConfigDict(use_enum_values=False)
+
+    correlation_id: str
+    payload: AppointmentRequest | CancellationRequest | RescheduleRequest = Field(
+        ..., discriminator="type"
+    )
+
+
+class AgentResult(BaseModel):
+    """JSON returned by the agent after processing a request."""
+
+    type: RequestType
+    resource: str
+    booking_id: str
+    status: BookingStatus
+    slot: Optional[Slot] = None
+    reason: Optional[str] = Field(
+        default=None, description="Populated when a request is rejected"
+    )
+
+
+class WorkflowEventRecord(BaseModel):
+    """A single append-only audit event. Ordering per booking is by `seq`."""
+
+    booking_id: str
+    seq: int
+    correlation_id: str
+    event_type: str
+    from_state: Optional[BookingStatus] = None
+    to_state: Optional[BookingStatus] = None
+    actor: WorkflowActor
+    tool_name: Optional[str] = None
+    request_payload: Optional[dict] = None
+    result: Optional[dict] = None
+    outcome: WorkflowOutcome
+    reason: Optional[str] = None
+    occurred_at: datetime
+
+################################################################################
+# FILE: services/shared/apptshared/timeutils.py
+################################################################################
+
+"""Timezone / slot helpers. All persisted times are UTC; resource-local times
+are derived using the resource's IANA timezone."""
+
+from __future__ import annotations
+
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from apptshared.schemas import Slot
+
+
+def parse_hhmm(value: str) -> time:
+    """Parse an 'HH:MM' opening-hours string into a time object."""
+    hh, mm = value.split(":")
+    return time(int(hh), int(mm))
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    """Return a timezone-aware datetime in UTC."""
+    if dt.tzinfo is None:
+        raise ValueError("naive datetime is not allowed; provide tz-aware value")
+    return dt.astimezone(timezone.utc)
+
+
+def local_slots_for_day(
+    day: datetime,
+    opening_start: time,
+    opening_end: time,
+    tz_name: str,
+    slot_minutes: int,
+) -> list[Slot]:
+    """Generate the candidate slots for a given calendar day in the resource's
+    timezone, returned as UTC `Slot`s.
+
+    `day` only needs to carry the date; the time component is ignored.
+    """
+    tz = ZoneInfo(tz_name)
+    start_local = datetime.combine(day.date(), opening_start, tzinfo=tz)
+    end_local = datetime.combine(day.date(), opening_end, tzinfo=tz)
+
+    slots: list[Slot] = []
+    cursor = start_local
+    step = timedelta(minutes=slot_minutes)
+    while cursor + step <= end_local:
+        slots.append(
+            Slot(
+                start=cursor.astimezone(timezone.utc),
+                end=(cursor + step).astimezone(timezone.utc),
+            )
+        )
+        cursor += step
+    return slots
+
+
+def within_opening_hours(
+    slot: Slot,
+    opening_start: time,
+    opening_end: time,
+    tz_name: str,
+) -> bool:
+    """True if the slot falls entirely within the opening hours (resource TZ)."""
+    tz = ZoneInfo(tz_name)
+    start_local = slot.start.astimezone(tz)
+    end_local = slot.end.astimezone(tz)
+
+    if start_local.date() != end_local.date():
+        return False
+
+    day_open = datetime.combine(start_local.date(), opening_start, tzinfo=tz)
+    day_close = datetime.combine(start_local.date(), opening_end, tzinfo=tz)
+    return day_open <= start_local and end_local <= day_close
+
+################################################################################
+# FILE: services/shared/pyproject.toml
+################################################################################
+
+[project]
+name = "apptshared"
+version = "0.1.0"
+description = "Shared schemas, config, and helpers for the appointment scheduling system"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "SQLAlchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["apptshared"]
+
+################################################################################
+# FILE: services/web-form/app/__init__.py
+################################################################################
+
+
+################################################################################
+# FILE: services/web-form/app/auth.py
+################################################################################
+
+"""Magic-link patient verification.
+
+Flow:
+1. startVerification(email) -> create a signed token, email a link via MCP email.
+2. verifyMagicLink(token)   -> validate token, mark patient verified, return ok.
+
+A patient is "legit" once they have proven control of their email address. The
+agent later checks `patients.verified_at` before acting on any request.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import select
+
+from apptshared.config import get_settings
+from apptshared.db import session_scope
+from apptshared.mcpclient import call_tool
+from apptshared.models import MagicLinkToken, Patient
+
+
+def _sign(email: str, nonce: str) -> str:
+    settings = get_settings()
+    mac = hmac.new(
+        settings.magic_link_secret.encode(), f"{email}:{nonce}".encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{nonce}.{mac}"
+
+
+async def start_verification(email: str) -> bool:
+    settings = get_settings()
+    nonce = secrets.token_urlsafe(16)
+    token = _sign(email, nonce)
+    expires = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.magic_link_ttl_minutes
+    )
+
+    for session in session_scope():
+        session.add(MagicLinkToken(token=token, email=email, expires_at=expires))
+        if not session.execute(
+            select(Patient).where(Patient.email == email)
+        ).scalar_one_or_none():
+            session.add(Patient(id=str(uuid.uuid4()), email=email))
+
+    link = f"{settings.public_base_url}/verify?token={token}"
+    await call_tool(
+        settings.mcp_email_url,
+        "send_email",
+        {
+            "to": email,
+            "subject": "Verify your appointment booking",
+            "body": f"Click to verify your email and continue booking:\n{link}",
+        },
+        settings.mcp_api_key,
+    )
+    return True
+
+
+def verify_magic_link(token: str) -> bool:
+    now = datetime.now(timezone.utc)
+    for session in session_scope():
+        row = session.get(MagicLinkToken, token)
+        if not row or row.used_at is not None or _expired(row.expires_at, now):
+            return False
+        row.used_at = now
+        patient = session.execute(
+            select(Patient).where(Patient.email == row.email)
+        ).scalar_one_or_none()
+        if patient:
+            patient.verified_at = now
+        return True
+    return False
+
+
+def is_verified(email: str) -> bool:
+    for session in session_scope():
+        patient = session.execute(
+            select(Patient).where(Patient.email == email)
+        ).scalar_one_or_none()
+        return bool(patient and patient.verified_at is not None)
+    return False
+
+
+def _expired(expires_at: datetime, now: datetime) -> bool:
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < now
+
+################################################################################
+# FILE: services/web-form/app/availability.py
+################################################################################
+
+"""Availability computation for the web-form service.
+
+availableSlots = candidate slots within opening hours
+                 - busy slots on the resource calendar (via MCP calendar tool)
+                 - active DB holds (pending/confirmed bookings)
+
+This is a *preview*. The agent re-checks authoritatively at booking time to
+close the race window (enforced by the DB unique index).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+
+from apptshared.config import get_settings
+from apptshared.db import session_scope
+from apptshared.mcpclient import call_tool
+from apptshared.models import Booking
+from apptshared.schemas import Slot
+from apptshared.timeutils import local_slots_for_day, parse_hhmm
+
+
+async def available_slots(resource: str, day: datetime) -> list[Slot]:
+    settings = get_settings()
+
+    hours = await call_tool(
+        settings.mcp_resource_details_url,
+        "get_opening_hours",
+        {"resource": resource},
+        settings.mcp_api_key,
+    )
+    resource_info = await call_tool(
+        settings.mcp_resource_details_url,
+        "get_resource",
+        {"resource": resource},
+        settings.mcp_api_key,
+    )
+    if not resource_info or resource_info.get("error"):
+        return []
+
+    tz_name = hours.get("timezone", settings.default_timezone)
+    dow = str(day.weekday())
+    day_hours = hours.get("days", {}).get(dow)
+    if not day_hours:
+        return []  # closed that day
+
+    candidates = local_slots_for_day(
+        day=day,
+        opening_start=parse_hhmm(day_hours["start"]),
+        opening_end=parse_hhmm(day_hours["end"]),
+        tz_name=tz_name,
+        slot_minutes=settings.slot_minutes,
+    )
+    if not candidates:
+        return []
+
+    window_start = candidates[0].start
+    window_end = candidates[-1].end
+    calendar_id = resource_info["calendar_id"]
+
+    busy_raw = await call_tool(
+        settings.mcp_calendar_url,
+        "get_busy_slots",
+        {
+            "calendar_id": calendar_id,
+            "start_iso": window_start.isoformat(),
+            "end_iso": window_end.isoformat(),
+        },
+        settings.mcp_api_key,
+    )
+    busy = [
+        Slot(
+            start=datetime.fromisoformat(b["start"]),
+            end=datetime.fromisoformat(b["end"]),
+        )
+        for b in (busy_raw or [])
+    ]
+
+    holds = _active_holds(resource_info["id"], window_start, window_end)
+
+    free: list[Slot] = []
+    for slot in candidates:
+        if any(slot.overlaps(b) for b in busy):
+            continue
+        if any(slot.overlaps(h) for h in holds):
+            continue
+        free.append(slot)
+    return free
+
+
+def _active_holds(resource_id: str, start: datetime, end: datetime) -> list[Slot]:
+    for session in session_scope():
+        rows = session.execute(
+            select(Booking).where(
+                Booking.resource_id == resource_id,
+                Booking.status.in_(["pending", "confirmed"]),
+                Booking.start_utc < end,
+                Booking.end_utc > start,
+            )
+        )
+        return [
+            Slot(start=_as_utc(b.start_utc), end=_as_utc(b.end_utc))
+            for b in rows.scalars()
+        ]
+    return []
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+################################################################################
+# FILE: services/web-form/app/bookings.py
+################################################################################
+
+"""Booking creation/lookup for the web-form service.
+
+Creating an appointment writes a `pending` booking (the DB unique index is the
+authoritative guard against double-booking) and publishes a request envelope to
+the queue for the agent to process.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from apptshared.config import get_settings
+from apptshared.db import session_scope
+from apptshared.mcpclient import call_tool
+from apptshared.models import Booking, Patient
+from apptshared.queue import build_queue
+from apptshared.schemas import (
+    AppointmentRequest,
+    CancellationRequest,
+    RequestEnvelope,
+    RescheduleRequest,
+    Slot,
+)
+
+
+class BookingError(Exception):
+    pass
+
+
+async def _resolve_resource_id(resource: str) -> str:
+    settings = get_settings()
+    info = await call_tool(
+        settings.mcp_resource_details_url,
+        "get_resource",
+        {"resource": resource},
+        settings.mcp_api_key,
+    )
+    if not info or info.get("error"):
+        raise BookingError(f"Unknown resource: {resource}")
+    return info["id"]
+
+
+def _patient_id(session, email: str) -> str:
+    patient = session.execute(
+        select(Patient).where(Patient.email == email)
+    ).scalar_one_or_none()
+    if not patient:
+        raise BookingError("Patient not found; verify your email first.")
+    return patient.id
+
+
+async def create_appointment(resource: str, email: str, slot: Slot) -> str:
+    resource_id = await _resolve_resource_id(resource)
+    booking_id = f"bk-{uuid.uuid4().hex[:10]}"
+    idem = f"appt-{resource_id}-{slot.start.isoformat()}"
+
+    try:
+        for session in session_scope():
+            patient_id = _patient_id(session, email)
+            session.add(
+                Booking(
+                    id=booking_id,
+                    patient_id=patient_id,
+                    resource_id=resource_id,
+                    start_utc=slot.start,
+                    end_utc=slot.end,
+                    status="pending",
+                    idempotency_key=idem,
+                )
+            )
+    except IntegrityError as exc:
+        raise BookingError("That slot is no longer available.") from exc
+
+    envelope = RequestEnvelope(
+        correlation_id=str(uuid.uuid4()),
+        payload=AppointmentRequest(
+            booking_id=booking_id,
+            resource=resource,
+            patient_email=email,
+            idempotency_key=idem,
+            slot=slot,
+        ),
+    )
+    build_queue().publish(envelope)
+    return booking_id
+
+
+async def request_cancellation(booking_id: str, email: str) -> str:
+    booking = _load_booking(booking_id)
+    envelope = RequestEnvelope(
+        correlation_id=str(uuid.uuid4()),
+        payload=CancellationRequest(
+            booking_id=booking_id,
+            resource=booking["resource_id"],
+            patient_email=email,
+            idempotency_key=f"cancel-{booking_id}",
+            slot=Slot(start=booking["start_utc"], end=booking["end_utc"]),
+        ),
+    )
+    build_queue().publish(envelope)
+    return booking_id
+
+
+async def request_reschedule(booking_id: str, email: str, new_slot: Slot) -> str:
+    booking = _load_booking(booking_id)
+    envelope = RequestEnvelope(
+        correlation_id=str(uuid.uuid4()),
+        payload=RescheduleRequest(
+            booking_id=booking_id,
+            resource=booking["resource_id"],
+            patient_email=email,
+            idempotency_key=f"resched-{booking_id}-{new_slot.start.isoformat()}",
+            old_slot=Slot(start=booking["start_utc"], end=booking["end_utc"]),
+            new_slot=new_slot,
+        ),
+    )
+    build_queue().publish(envelope)
+    return booking_id
+
+
+def _load_booking(booking_id: str) -> dict:
+    for session in session_scope():
+        b = session.get(Booking, booking_id)
+        if not b:
+            raise BookingError(f"Unknown booking: {booking_id}")
+        return {
+            "resource_id": b.resource_id,
+            "start_utc": _as_utc(b.start_utc),
+            "end_utc": _as_utc(b.end_utc),
+        }
+    raise BookingError(f"Unknown booking: {booking_id}")
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+################################################################################
+# FILE: services/web-form/app/main.py
+################################################################################
+
+"""FastAPI application for the web-form edge service.
+
+- GraphQL API + GraphiQL playground (Strawberry) at /graphql
+- /verify magic-link landing endpoint
+- / serves a minimal booking form
+- /healthz health probe
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from strawberry.fastapi import GraphQLRouter
+
+from app import auth
+from app.schema import schema
+
+app = FastAPI(title="Appointment Web/Form Service")
+
+# graphiql=True enables the built-in GraphQL Playground at /graphql
+graphql_app = GraphQLRouter(schema, graphiql=True)
+app.include_router(graphql_app, prefix="/graphql")
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/healthz", response_class=PlainTextResponse)
+def healthz() -> str:
+    return "ok"
+
+
+@app.get("/verify", response_class=HTMLResponse)
+def verify(token: str) -> str:
+    ok = auth.verify_magic_link(token)
+    msg = "Email verified â€” you can return to the form and book." if ok else "Invalid or expired link."
+    return f"<html><body><h2>{msg}</h2></body></html>"
+
+
+if _STATIC_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")
+
+################################################################################
+# FILE: services/web-form/app/schema.py
+################################################################################
+
+"""Strawberry GraphQL schema for the web-form edge service."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import strawberry
+from sqlalchemy import select
+
+from apptshared.config import get_settings
+from apptshared.db import session_scope
+from apptshared.mcpclient import call_tool
+from apptshared.models import WorkflowEvent
+from apptshared.schemas import Slot
+
+from app import auth, bookings
+from app.availability import available_slots as compute_available_slots
+
+
+@strawberry.type
+class ResourceType:
+    id: str
+    name: str
+    email: str
+    timezone: str
+
+
+@strawberry.type
+class SlotType:
+    start: datetime
+    end: datetime
+
+
+@strawberry.type
+class TimelineEvent:
+    seq: int
+    event_type: str
+    from_state: str | None
+    to_state: str | None
+    actor: str
+    tool_name: str | None
+    outcome: str
+    reason: str | None
+    occurred_at: datetime
+
+
+@strawberry.type
+class MutationResult:
+    ok: bool
+    message: str
+    booking_id: str | None = None
+
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    async def resources(self) -> list[ResourceType]:
+        settings = get_settings()
+        rows = await call_tool(
+            settings.mcp_resource_details_url, "list_resources", {}, settings.mcp_api_key
+        )
+        return [
+            ResourceType(
+                id=r["id"], name=r["name"], email=r["email"], timezone=r["timezone"]
+            )
+            for r in (rows or [])
+        ]
+
+    @strawberry.field
+    async def available_slots(self, resource: str, day: datetime) -> list[SlotType]:
+        slots = await compute_available_slots(resource, day)
+        return [SlotType(start=s.start, end=s.end) for s in slots]
+
+    @strawberry.field
+    def booking_timeline(self, booking_id: str) -> list[TimelineEvent]:
+        """Reconstruct the full lifecycle of a booking from the audit log."""
+        for session in session_scope():
+            rows = session.execute(
+                select(WorkflowEvent)
+                .where(WorkflowEvent.booking_id == booking_id)
+                .order_by(WorkflowEvent.seq)
+            ).scalars()
+            return [
+                TimelineEvent(
+                    seq=e.seq,
+                    event_type=e.event_type,
+                    from_state=e.from_state,
+                    to_state=e.to_state,
+                    actor=e.actor,
+                    tool_name=e.tool_name,
+                    outcome=e.outcome,
+                    reason=e.reason,
+                    occurred_at=e.occurred_at,
+                )
+                for e in rows
+            ]
+        return []
+
+
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
+    async def start_verification(self, email: str) -> MutationResult:
+        await auth.start_verification(email)
+        return MutationResult(ok=True, message="Verification email sent.")
+
+    @strawberry.mutation
+    def verify_magic_link(self, token: str) -> MutationResult:
+        ok = auth.verify_magic_link(token)
+        return MutationResult(
+            ok=ok, message="Verified." if ok else "Invalid or expired token."
+        )
+
+    @strawberry.mutation
+    async def request_appointment(
+        self, resource: str, email: str, start: datetime, end: datetime
+    ) -> MutationResult:
+        if not auth.is_verified(email):
+            return MutationResult(ok=False, message="Email not verified.")
+        try:
+            booking_id = await bookings.create_appointment(
+                resource, email, Slot(start=start, end=end)
+            )
+        except bookings.BookingError as exc:
+            return MutationResult(ok=False, message=str(exc))
+        return MutationResult(
+            ok=True, message="Appointment request submitted.", booking_id=booking_id
+        )
+
+    @strawberry.mutation
+    async def cancel_appointment(
+        self, booking_id: str, email: str
+    ) -> MutationResult:
+        if not auth.is_verified(email):
+            return MutationResult(ok=False, message="Email not verified.")
+        try:
+            await bookings.request_cancellation(booking_id, email)
+        except bookings.BookingError as exc:
+            return MutationResult(ok=False, message=str(exc))
+        return MutationResult(
+            ok=True, message="Cancellation submitted.", booking_id=booking_id
+        )
+
+    @strawberry.mutation
+    async def reschedule_appointment(
+        self, booking_id: str, email: str, start: datetime, end: datetime
+    ) -> MutationResult:
+        if not auth.is_verified(email):
+            return MutationResult(ok=False, message="Email not verified.")
+        try:
+            await bookings.request_reschedule(
+                booking_id, email, Slot(start=start, end=end)
+            )
+        except bookings.BookingError as exc:
+            return MutationResult(ok=False, message=str(exc))
+        return MutationResult(
+            ok=True, message="Reschedule submitted.", booking_id=booking_id
+        )
+
+
+schema = strawberry.Schema(query=Query, mutation=Mutation)
+
+################################################################################
+# FILE: services/web-form/app/static/index.html
+################################################################################
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Book an Appointment</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      fieldset { margin-bottom: 1rem; }
+      label { display: block; margin: 0.4rem 0 0.1rem; font-weight: 600; }
+      input, select, button { padding: 0.5rem; font-size: 1rem; }
+      button { cursor: pointer; }
+      #slots button { display: inline-block; margin: 0.2rem; }
+      pre { background: #f4f4f4; padding: 0.75rem; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Book an Appointment</h1>
+
+    <fieldset>
+      <legend>1. Verify your email</legend>
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+      <button onclick="startVerification()">Send verification link</button>
+      <p><em>Open the link from the email, then continue below.</em></p>
+    </fieldset>
+
+    <fieldset>
+      <legend>2. Choose a resource &amp; day</legend>
+      <label for="resource">Resource</label>
+      <select id="resource"></select>
+      <label for="day">Day</label>
+      <input id="day" type="date" />
+      <button onclick="loadSlots()">Show available times</button>
+      <div id="slots"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>3. Result</legend>
+      <pre id="result">â€”</pre>
+    </fieldset>
+
+    <script>
+      const GQL = "/graphql";
+      async function gql(query, variables) {
+        const res = await fetch(GQL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables }),
+        });
+        return res.json();
+      }
+      function show(obj) {
+        document.getElementById("result").textContent = JSON.stringify(obj, null, 2);
+      }
+      async function loadResources() {
+        const r = await gql(`{ resources { id name timezone } }`);
+        const sel = document.getElementById("resource");
+        sel.innerHTML = "";
+        (r.data?.resources || []).forEach((res) => {
+          const opt = document.createElement("option");
+          opt.value = res.name;
+          opt.textContent = `${res.name} (${res.timezone})`;
+          sel.appendChild(opt);
+        });
+      }
+      async function startVerification() {
+        const email = document.getElementById("email").value;
+        const r = await gql(
+          `mutation($e:String!){ startVerification(email:$e){ ok message } }`,
+          { e: email }
+        );
+        show(r.data?.startVerification);
+      }
+      async function loadSlots() {
+        const resource = document.getElementById("resource").value;
+        const day = document.getElementById("day").value + "T00:00:00+00:00";
+        const r = await gql(
+          `query($r:String!,$d:DateTime!){ availableSlots(resource:$r, day:$d){ start end } }`,
+          { r: resource, d: day }
+        );
+        const box = document.getElementById("slots");
+        box.innerHTML = "";
+        (r.data?.availableSlots || []).forEach((s) => {
+          const b = document.createElement("button");
+          b.textContent = new Date(s.start).toLocaleString();
+          b.onclick = () => book(resource, s.start, s.end);
+          box.appendChild(b);
+        });
+        if (!(r.data?.availableSlots || []).length) box.textContent = "No slots available.";
+      }
+      async function book(resource, start, end) {
+        const email = document.getElementById("email").value;
+        const r = await gql(
+          `mutation($r:String!,$e:String!,$s:DateTime!,$en:DateTime!){
+             requestAppointment(resource:$r, email:$e, start:$s, end:$en){ ok message bookingId }
+           }`,
+          { r: resource, e: email, s: start, en: end }
+        );
+        show(r.data?.requestAppointment);
+      }
+      loadResources();
+    </script>
+  </body>
+</html>
+
+################################################################################
+# FILE: services/web-form/Dockerfile
+################################################################################
+
+FROM python:3.12-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+COPY services/shared /app/services/shared
+COPY services/web-form /app/services/web-form
+
+RUN pip install --no-cache-dir /app/services/shared /app/services/web-form
+
+WORKDIR /app/services/web-form
+EXPOSE 8080
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+
+################################################################################
+# FILE: services/web-form/pyproject.toml
+################################################################################
+
+[project]
+name = "web-form"
+version = "0.1.0"
+description = "GraphQL edge service: appointment form, availability, magic-link auth"
+requires-python = ">=3.12"
+dependencies = [
+    "apptshared",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "strawberry-graphql[fastapi]>=0.235",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "httpx>=0.27", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.uv.sources]
+apptshared = { path = "../shared", editable = true }

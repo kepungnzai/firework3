@@ -1,0 +1,6 @@
+apiVersion: v2
+name: appointment-scheduler
+description: Appointment Scheduling Agent - web-form, agent-orchestrator, and MCP tools
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

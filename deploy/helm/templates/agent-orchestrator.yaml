@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-orchestrator
+  labels:
+    app: agent-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-orchestrator
+  template:
+    metadata:
+      labels:
+        app: agent-orchestrator
+    spec:
+      containers:
+        - name: agent-orchestrator
+          image: "{{ .Values.image.registry }}/agent-orchestrator:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+{{ include "appt.commonEnv" . | indent 12 }}
+            - name: AZURE_AI_PROJECT_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: AZURE_AI_PROJECT_ENDPOINT
+                  optional: true
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

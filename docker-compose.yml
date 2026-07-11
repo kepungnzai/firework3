@@ -1,0 +1,98 @@
+# Local development stack. Uses FAKE_PROVIDERS=true so no Google/Azure calls are
+# made — calendar/email use in-memory fakes and the agent uses deterministic
+# message text. The queue is a file-backed directory shared via a volume.
+name: appointment-scheduler
+
+x-common-env: &common-env
+  FAKE_PROVIDERS: "true"
+  DATABASE_URL: postgresql+psycopg://appt:appt@postgres:5432/appointments
+  MCP_RESOURCE_DETAILS_URL: http://mcp-resource-details:8081/mcp
+  MCP_CALENDAR_URL: http://mcp-calendar:8082/mcp
+  MCP_EMAIL_URL: http://mcp-email:8083/mcp
+  MCP_API_KEY: local-dev-key
+  LOCAL_QUEUE_DIR: /queue
+  PUBLIC_BASE_URL: http://localhost:8080
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: appt
+      POSTGRES_PASSWORD: appt
+      POSTGRES_DB: appointments
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appt -d appointments"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: db/Dockerfile
+    environment:
+      <<: *common-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  mcp-resource-details:
+    build:
+      context: .
+      dockerfile: mcp-servers/mcp-resource-details/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8081:8081"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  mcp-calendar:
+    build:
+      context: .
+      dockerfile: mcp-servers/mcp-calendar/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8082:8082"
+
+  mcp-email:
+    build:
+      context: .
+      dockerfile: mcp-servers/mcp-email/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8083:8083"
+
+  web-form:
+    build:
+      context: .
+      dockerfile: services/web-form/Dockerfile
+    environment:
+      <<: *common-env
+    ports:
+      - "8080:8080"
+    volumes:
+      - queue:/queue
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: services/agent-orchestrator/Dockerfile
+    environment:
+      <<: *common-env
+    volumes:
+      - queue:/queue
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  queue:
