@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from apptshared.config import get_settings
 from apptshared.schemas import (
     AgentResult,
     AppointmentRequest,
@@ -39,21 +40,22 @@ async def process(envelope: RequestEnvelope, tools: Tools | None = None) -> Agen
     booking_id = payload.booking_id
 
     # Idempotency: skip if already in a terminal state for this key.
-    if repository.already_processed(payload.idempotency_key):
+    if not get_settings().fake_providers:    
+        if repository.already_processed(payload.idempotency_key):
+            audit.record(
+                booking_id, corr, "duplicate_skipped", WorkflowActor.system,
+                WorkflowOutcome.ok, reason="idempotent_duplicate",
+            )
+            return _result(payload, repository.get_status(booking_id) or BookingStatus.confirmed)
+
+        # Deterministic guardrail gate.
+        verdict = await guardrail.validate(payload, tools)
+        if not verdict.ok:
+            return await _reject(payload, corr, tools, verdict.reason or "rejected")
+
         audit.record(
-            booking_id, corr, "duplicate_skipped", WorkflowActor.system,
-            WorkflowOutcome.ok, reason="idempotent_duplicate",
+            booking_id, corr, "guardrail_passed", WorkflowActor.guardrail, WorkflowOutcome.ok
         )
-        return _result(payload, repository.get_status(booking_id) or BookingStatus.confirmed)
-
-    # Deterministic guardrail gate.
-    verdict = await guardrail.validate(payload, tools)
-    if not verdict.ok:
-        return await _reject(payload, corr, tools, verdict.reason or "rejected")
-
-    audit.record(
-        booking_id, corr, "guardrail_passed", WorkflowActor.guardrail, WorkflowOutcome.ok
-    )
 
     # LLM-driven agent loop: the planner decides each next action; the firewall
     # (guardrail admission above + state-machine transition checks below) keeps
@@ -98,7 +100,7 @@ async def _execute(action, payload, corr: str, tools: Tools, state: _LoopState) 
     tool = action.tool
     if tool == "get_resource":
         state.resource = await tools.get_resource(payload.resource)
-        return {"resource": state.resource}
+        return {"resource": state.  resource}
     if tool == "create_event":
         return await _exec_create_event(payload, corr, tools, state)
     if tool == "cancel_event":

@@ -32,7 +32,9 @@ def _handle(envelope: RequestEnvelope) -> None:
 
 def main() -> None:
     logger.info("agent orchestrator consuming from queue...")
-    build_queue().consume_forever(_handle)
+    queue = build_queue()
+    logger.info(f"Using queue backend: {type(queue).__name__}")
+    queue.consume_forever(_handle)
 
 
 if __name__ == "__main__":

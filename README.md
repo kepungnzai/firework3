@@ -93,6 +93,73 @@ providers and a file-backed queue — no Google or Azure account required. See
 
 ---
 
+## Database: run Postgres + seed resources
+
+The `mcp-resource-details` server (`list_resources`, `get_resource`,
+`get_opening_hours`) reads from Postgres via `apptshared` — it returns nothing
+until the database is **migrated and seeded**. The seed
+([`db/seed.py`](db/seed.py)) inserts two resources (**Dr Lee**, **Dr Patel**)
+and org opening hours (**09:00–17:00 Mon–Fri**).
+
+### Start Postgres in Docker
+
+Bring up a Postgres 16 container directly with `docker run` (exposed on
+`localhost:5432`, user/password `appt` / `appt`, database `appointments`):
+
+```powershell
+docker run -d --name appt-postgres `
+  -e POSTGRES_USER=appt `
+  -e POSTGRES_PASSWORD=appt `
+  -e POSTGRES_DB=appointments `
+  -p 5432:5432 `
+  postgres:16-alpine
+```
+
+Check it is accepting connections before seeding:
+
+```powershell
+docker exec appt-postgres pg_isready -U appt -d appointments
+```
+
+### Seed the database
+
+Seed from the host (requires the venv from
+[Option B](#option-b--run-each-service-locally-no-containers), step 1). Point
+`DATABASE_URL` at the container on `localhost` and run the migration + seed:
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://appt:appt@localhost:5432/appointments"
+cd db
+..\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe seed.py     # Dr Lee, Dr Patel; hours 09:00-17:00 Mon-Fri
+cd ..
+```
+
+The seed is **idempotent** — safe to run repeatedly.
+
+### Verify the resources are queryable
+
+Once Postgres is seeded and `mcp-resource-details` is running (step 4 of
+Option B), list the resources through the MCP Inspector:
+
+```powershell
+make inspect-resources     # npx @modelcontextprotocol/inspector http://localhost:8081/mcp
+```
+
+Or query Postgres directly inside the container:
+
+```powershell
+docker exec appt-postgres psql -U appt -d appointments -c "select id, name, timezone from resources;"
+```
+
+To wipe and re-seed a fresh database, remove the container and start over:
+
+```powershell
+docker rm -f appt-postgres          # deletes the container and its data
+```
+
+---
+
 ## Running
 
 ### Option A — Everything in Docker (recommended)
@@ -146,11 +213,17 @@ make venv && make install
 **2. Start Postgres and apply migrations + seed.** The simplest option is the
 containerised database only; everything else runs on the host:
 
-```bash
-docker compose up -d postgres          # or use a local Postgres on :5432
+```powershell
+docker run -d --name appt-postgres `
+  -e POSTGRES_USER=appt `
+  -e POSTGRES_PASSWORD=appt `
+  -e POSTGRES_DB=appointments `
+  -p 5432:5432 `
+  postgres:16-alpine
+# or, via compose: docker compose up -d postgres
 cd db
-../.venv/Scripts/python.exe -m alembic upgrade head
-../.venv/Scripts/python.exe seed.py    # Dr Lee, Dr Patel; hours 09:00–17:00 Mon–Fri
+..\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe seed.py    # Dr Lee, Dr Patel; hours 09:00-17:00 Mon-Fri
 cd ..
 ```
 

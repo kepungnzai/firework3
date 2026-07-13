@@ -93,7 +93,7 @@ class ServiceBusQueue(QueueBackend):
 
 def build_queue() -> QueueBackend:
     settings = get_settings()
-    if settings.service_bus_connection_string and not settings.fake_providers:
+    if settings.service_bus_connection_string:
         return ServiceBusQueue(
             settings.service_bus_connection_string, settings.service_bus_queue_name
         )
